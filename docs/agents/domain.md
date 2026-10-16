@@ -32,24 +32,23 @@ Document Text
 
 Semantic anchors represent canonical domain concepts embedded into dense vector space at service startup. The catalog defines three categories:
 
-### Document Types (12 Anchors)
+### Document Types (11 Anchors)
 
 Zero-shot anchors evaluated against the `header` vector:
 
 | Anchor | Description & Keywords |
 | :--- | :--- |
-| `Rechnung` | Rechnungen über Warenlieferungen oder Dienstleistungen mit Zahlungsziel. |
-| `Quittung` | Zahlungsbelege, Kassenbons, Barzahlungsquittungen. |
-| `Abrechnung` | Gehaltsabrechnungen, Lohnabrechnungen, Nebenkostenabrechnungen. |
-| `Kontoauszug` | Bankkontoauszüge, Kreditkartenabrechnungen, Finanzübersichten. |
-| `Vertrag` | Verträge, Vereinbarungen, Mietverträge, Arbeitsverträge. |
-| `Bescheid` | Behördliche Bescheide, Steuerbescheide, Verwaltungsakte. |
-| `Versicherungsschein` | Versicherungspolicen, Versicherungsscheine, Deckungszusagen. |
-| `Mahnung` | Zahlungserinnerungen, Mahnungen, Inkassoforderungen. |
-| `Bestätigung` | Anmeldebestätigungen, Buchungsbestätigungen, Immatrikulationsbescheinigungen. |
-| `Zertifikat` | Urkunden, Zeugnisse, Bescheinigungen, Prüfungszertifikate. |
-| `Arztbrief` | Medizinische Befunde, Arztbriefe, Laborberichte, Rezepte. |
-| `Brief` | Allgemeine Korrespondenz, Anschreiben, Informationsschreiben. |
+| `Rechnung` | Kaufbelege und Handelsrechnungen über gelieferte Waren oder erbrachte Dienstleistungen. |
+| `Abrechnung` | Nebenkosten-, Betriebs- und Heizkostenabrechnungen, monatliche Lohn- oder Gehaltsabrechnungen. |
+| `Kontoauszug` | Bankauszüge und Finanzübersichten eines Giro-, Tagesgeld- oder Anlagekontos. |
+| `Bescheid` | Behördliche Festsetzungen und öffentlich-rechtliche Verwaltungsakte mit Rechtsbehelfsbelehrung. |
+| `Bescheinigung` | Offizielle Bestätigungen und Nachweise (z.B. Spendenbescheinigung, Immatrikulationsbescheinigung). |
+| `Vertrag` | Rechtsgeschäftliche Vereinbarungen (Mietvertrag, Arbeitsvertrag, Kaufvertrag, Versicherungsschein). |
+| `Korrespondenz` | Allgemeiner schriftlicher Briefverkehr, formlose Mitteilungen und Informationsschreiben. |
+| `Steuern` | Steuererklärungen, Steuerkorrespondenz, Elster-Übertragungsprotokolle und Finanzamtsanträge. |
+| `Gesundheit` | Medizinische Unterlagen, ärztliche Befunde, Laborberichte, Arztbriefe und Rezepte. |
+| `Urkunde` | Amtliche Beurkundungen und staatliche Personenstandsurkunden (Geburts-, Heirats- oder Sterbeurkunde). |
+| `Sonstiges` | Auffangkategorie für sonstige private oder geschäftliche Dokumente ohne spezifischen Typus. |
 
 ### Tax Deduction Categories (5 Anchors)
 
@@ -57,30 +56,30 @@ Evaluated against the `content` vector:
 
 | Anchor | Deduction Category | Legal Context |
 | :--- | :--- | :--- |
-| `steuer:haushaltsnah-35a` | Handwerkerleistungen & haushaltsnahe Dienstleistungen | § 35a EStG |
 | `steuer:werbungskosten` | Arbeitsmittel, Fachliteratur, Fortbildung, Bewerbungen, Dienstreisen | § 9 EStG |
-| `steuer:sonderausgaben` | Spenden, Vorsorgeaufwendungen, Kirchensteuer, Kinderbetreuung | §§ 10, 10b EStG |
-| `steuer:krankheit-aussergewoehnlich` | Krankheitskosten, Zahnersatz, Medikamente, Pflegekosten | § 33 EStG |
-| `steuer:vermietung-anlage-v` | Instandhaltung, Grundsteuer, Hausverwaltung, Hausgeld | Anlage V EStG |
+| `steuer:haushaltsnah-35a` | Handwerkerleistungen & haushaltsnahe Dienstleistungen | § 35a EStG |
+| `steuer:sonderausgaben` | Spenden, Vorsorgeaufwendungen, Kirchensteuer, Riester | §§ 10, 10b EStG |
+| `steuer:krankheit-aussergewoehnlich` | Krankheitskosten, Zahnersatz, Medikamente, Heilbehandlungen | § 33 EStG |
+| `steuer:anlage-v` | Einkünfte V&V, Hausgeld, Grundsteuer, Instandhaltung Mietobjekte | Anlage V EStG |
 
 ### Thematic Macro-Tags (14 Anchors)
 
 Evaluated against the `content` vector for multi-label assignment:
 
-- `Energie` (Strom, Gas, Fernwärme, Heizkosten)
-- `Fahrzeug` (Kfz-Kauf, Werkstatt, TÜV, Leasing)
-- `Finanzen` (Bankgebühren, Kredite, Zinsen, Depot)
-- `Gesundheit` (Arzt, Apotheke, Behandlungen, Krankenkasse)
-- `Haushalt` (Haushaltsgeräte, Möbel, Gartenpflege)
-- `Immobilien` (Mietvertrag, Nebenkosten, Hausverwaltung)
-- `IT & Elektronik` (Software, Hardware, Cloud, Domain)
-- `Reise` (Flug, Hotel, Bahn, Mietwagen)
-- `Steuern` (Finanzamt, Steuerberater, Elster)
-- `Telekommunikation` (Mobilfunk, Internet, Telefon, Festnetz)
-- `Unterhaltung` (Streaming, Musik, Gaming, Bücher)
-- `Versicherung` (Haftpflicht, Hausrat, Berufsunfähigkeit, Kfz-Versicherung)
-- `Verträge` (Laufzeitverträge, Kündigungen, Mitgliedschaften)
-- `Wohnen` (Möbel, Renovierung, Dekoration)
+- `Fahrzeug` (Kfz, Auto, Werkstatt, TÜV, Tanken, Leasing)
+- `Energie` (Strom, Gas, Fernwärme, Stadtwerke, Zählerstand)
+- `Telekommunikation` (Mobilfunk, Internet, DSL, Glasfaser, Telekom, Vodafone)
+- `Gesundheit` (Arzt, Krankenhaus, Apotheke, Medikament, Krankenkasse)
+- `Versicherung` (Versicherung, Police, Haftpflicht, Hausrat, Schadensmeldung)
+- `Immobilien` (Wohnung, Miete, Hausverwaltung, Hausgeld, Grundsteuer)
+- `Gehalt` (Gehalt, Lohn, Arbeitgeber, Entgelt, Sozialversicherung)
+- `Bank` (Bank, Girokonto, Kredit, Darlehen, Zinsen, Gebühren)
+- `Depot` (Depot, Aktien, Fonds, ETF, Dividende, ISIN, Wertpapier)
+- `Behörde` (Behörde, Bürgeramt, Stadtverwaltung, Amtsgericht, Rentenversicherung)
+- `Bildung` (Schule, Universität, Studium, Weiterbildung, Zertifikat)
+- `Reisen` (Reise, Hotel, Flug, Bahn, Urlaub, Buchung)
+- `Mitgliedschaft` (Verein, Verband, Mitgliedschaft, ADAC, Gewerkschaft, Beitrag)
+- `Altersvorsorge` (Rente, Altersvorsorge, Renteninformation, Versorgungswerk, Betriebsrente)
 
 ---
 
@@ -118,8 +117,11 @@ Similarity Score
 
 When Qdrant contains indexed documents with confirmed tax annotations:
 
-- A top-scoring k-NN neighbor with `is_tax_relevant = True` can elevate the overall tax score above the baseline anchor score.
-- If the nearest neighbor's score exceeds the anchor score, its verified `tax_category` is inherited.
+- Qdrant is queried for the top-5 tax-relevant neighbors (`is_tax_relevant = True`).
+- A similarity-weighted score is computed across the retrieved neighbors:
+  $$\text{score}_{\text{knn}} = \frac{\sum s_i^2}{\sum s_i}$$
+- The category is selected from the highest-weighted category cluster $\operatorname{argmax}_c \sum_{i \in c} s_i$.
+- If $\text{score}_{\text{knn}} > \text{score}_{\text{anchor}}$, the k-NN score and cluster category elevate the classification.
 
 ---
 
@@ -129,8 +131,8 @@ Thematic tagging operates in multi-label mode:
 
 1. **Anchor Thresholding:**
    Any macro-tag whose anchor similarity is $\ge 0{,}78$ is included in `predicted_tags`.
-2. **k-NN Voting:**
-   Qdrant is queried for the 5 nearest neighbors in the `content` vector space. Any tag appearing in $\ge 2$ neighbors is assigned, even if its direct semantic anchor score is below $0{,}78$.
+2. **k-NN Voting & Canonical Mapping:**
+   Qdrant is queried for the 5 nearest neighbors in the `content` vector space. Raw tags from neighbor payloads are mapped to canonical macro-tags (matching anchor names or keywords). Any canonical tag supported by $\ge 2$ neighbors is assigned, even if its direct semantic anchor score is below $0{,}78$.
 
 ---
 

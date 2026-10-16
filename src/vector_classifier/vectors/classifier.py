@@ -55,6 +55,19 @@ def _anchor_to_embedding_text(anchor: SemanticAnchor) -> str:
     return text
 
 
+def map_to_canonical_macro_tag(raw_tag: str) -> str | None:
+    """Map raw tag string to canonical macro-tag matching anchor name or keywords."""
+    if not raw_tag or not isinstance(raw_tag, str):
+        return None
+    normalized = raw_tag.strip().lower()
+    for anchor in get_thematic_tag_anchors():
+        if normalized == anchor.name.lower():
+            return anchor.name
+        if any(normalized == kw.lower() for kw in anchor.keywords):
+            return anchor.name
+    return None
+
+
 _DEFAULT: Any = object()
 
 
@@ -220,7 +233,7 @@ class VectorClassifierEngine:
     async def _query_tax_knn(
         self, content_vector: list[float]
     ) -> tuple[float, str | None]:
-        """Query Qdrant for tax-relevant nearest neighbors."""
+        """Query Qdrant for tax-relevant nearest neighbors with weighted scoring."""
         if self.qdrant_manager is None:
             return 0.0, None
         try:
@@ -230,14 +243,33 @@ class VectorClassifierEngine:
                 limit=5,
                 filter_criteria={"is_tax_relevant": True},
             )
-            if tax_neighbors:
-                top_neighbor = max(
-                    tax_neighbors,
-                    key=lambda n: getattr(n, "score", 0.0),
-                )
-                knn_tax_score = round(float(getattr(top_neighbor, "score", 0.0)), 4)
-                payload = getattr(top_neighbor, "payload", {}) or {}
-                return knn_tax_score, payload.get("tax_category")
+            if not tax_neighbors:
+                return 0.0, None
+
+            # Calculate similarity-weighted score across top-5 tax neighbors
+            scores = [max(0.0, float(getattr(n, "score", 0.0))) for n in tax_neighbors]
+            total_score = sum(scores)
+            if total_score <= 0.0:
+                return 0.0, None
+
+            # Similarity-weighted mean: sum(s_i^2) / sum(s_i)
+            weighted_score = round(sum(s * s for s in scores) / total_score, 4)
+
+            # Select category from highest-weighted category cluster
+            cluster_weights: dict[str, float] = {}
+            for n in tax_neighbors:
+                score = max(0.0, float(getattr(n, "score", 0.0)))
+                payload = getattr(n, "payload", {}) or {}
+                cat = payload.get("tax_category")
+                if cat and isinstance(cat, str):
+                    cluster_weights[cat] = cluster_weights.get(cat, 0.0) + score
+
+            best_category = (
+                max(cluster_weights.items(), key=lambda item: item[1])[0]
+                if cluster_weights
+                else None
+            )
+            return weighted_score, best_category
         except Exception as exc:
             logger.warning("k-NN tax vector search failed: %s", exc)
         return 0.0, None
@@ -274,7 +306,7 @@ class VectorClassifierEngine:
         qualifying_tags: set[str],
         tag_scores: dict[str, float],
     ) -> None:
-        """Query Qdrant neighbors and add tags supported by >= 2 neighbors."""
+        """Query Qdrant neighbors and add canonical macro-tags supported by >= 2 neighbors."""
         if self.qdrant_manager is None:
             return
         try:
@@ -289,12 +321,22 @@ class VectorClassifierEngine:
             neighbor_tag_counts: dict[str, int] = {}
             for n in all_neighbors:
                 payload = getattr(n, "payload", {}) or {}
-                tags = payload.get("tags") or payload.get("tags_original") or []
-                if isinstance(tags, list):
-                    for t in tags:
-                        neighbor_tag_counts[t] = neighbor_tag_counts.get(t, 0) + 1
-                elif isinstance(tags, str):
-                    neighbor_tag_counts[tags] = neighbor_tag_counts.get(tags, 0) + 1
+                raw_tags = payload.get("tags") or payload.get("tags_original") or []
+                if isinstance(raw_tags, str):
+                    raw_tags = [raw_tags]
+                elif not isinstance(raw_tags, list):
+                    raw_tags = []
+
+                # Map raw tags to canonical macro-tags and deduplicate per neighbor
+                neighbor_canonical_tags: set[str] = set()
+                for t in raw_tags:
+                    if isinstance(t, str):
+                        canonical = map_to_canonical_macro_tag(t)
+                        if canonical:
+                            neighbor_canonical_tags.add(canonical)
+
+                for tag in neighbor_canonical_tags:
+                    neighbor_tag_counts[tag] = neighbor_tag_counts.get(tag, 0) + 1
 
             for tag, count in neighbor_tag_counts.items():
                 if count >= 2:
