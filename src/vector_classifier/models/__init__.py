@@ -5,6 +5,7 @@ from vector_classifier.models.schemas import (
     ClassifyResponse,
     HealthResponse,
     SemanticAnchor,
+    VectorClassificationResult,
 )
 
 __all__ = [
@@ -12,4 +13,5 @@ __all__ = [
     "ClassifyResponse",
     "HealthResponse",
     "SemanticAnchor",
+    "VectorClassificationResult",
 ]
