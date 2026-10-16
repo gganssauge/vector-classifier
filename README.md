@@ -15,12 +15,15 @@
 
 ### Key Capabilities
 
-- **Zero-Shot Document Type Classification:** Matches document headers (`header` vector, ~1.000 tokens) against 12 canonical semantic type anchors via Cosine Similarity.
-- **Hybrid Tax Relevance Assessment:** Combines semantic anchors for German tax deduction categories (§ 35a Handwerkerleistungen, Werbungskosten, Sonderausgaben, außergewöhnliche Belastungen, Anlage V) with k-NN similarity to curated historical receipts.
+- **Named Vectors Architecture:** Splitting documents into two distinct 1,024-dimensional dense vectors:
+  - `header`: Briefkopf / first ~1,000 tokens (~3,000 characters) for zero-shot document type classification.
+  - `content`: Fließtext (up to 8,192 tokens) for tax relevance assessment and thematic macro-tags.
+- **Zero-Shot Document Type Classification:** Matches document headers (`header` vector) against 12 canonical semantic type anchors via Cosine Similarity.
+- **Hybrid Tax Relevance Assessment:** Combines semantic anchors for German tax deduction categories (§ 35a Handwerkerleistungen, Werbungskosten, Sonderausgaben, außergewöhnliche Belastungen, Anlage V) with k-NN similarity against curated historical receipts.
 - **Three-Zone Confidence Model:**
   - $\ge 0{,}82 \rightarrow$ High confidence: automatically marked as tax-relevant with specific deduction category.
   - $0{,}70\text{--}0{,}81 \rightarrow$ Medium confidence: marked for manual human review (`steuer-review`).
-  - $< 0{,}70 \rightarrow$ Low confidence: no action.
+  - $< 0{,}70 \rightarrow$ Low confidence: no action taken.
 - **Multi-Label Thematic Tagging:** Classifies documents into 14 consolidated macro-categories (e.g., `Fahrzeug`, `Energie`, `Telekommunikation`, `Gesundheit`, `Versicherung`, `Immobilien`).
 - **Deterministic & Idempotent:** Points in Qdrant use a deterministic UUIDv5 derived from the document's content SHA-256 hash.
 - **Dual Mode (API & CLI):** Serves real-time REST requests for orchestrators (e.g., `paperless-orchestrator`) and offers a CLI for batch backfills and offline dry-run audit passes.
@@ -80,19 +83,31 @@ Settings are managed via environment variables or a `.env` file using `pydantic-
 
 ### `GET /health`
 
-Liveness and readiness check verifying connectivity to Ollama and Qdrant.
+Liveness and readiness check verifying service status and connectivity to Ollama and Qdrant.
+
+**Response:**
+
+```json
+{
+  "status": "ok",
+  "version": "0.1.0",
+  "ollama_connected": true,
+  "qdrant_connected": true
+}
+```
 
 ### `POST /api/v1/classify`
 
-Takes document text and returns predicted document type, tax relevance evaluation, and thematic tags.
+Classifies document text and returns predicted document type, tax relevance assessment, and thematic macro-tags.
 
 **Request:**
 
 ```json
 {
-  "content": "Rechnung Nr. 2026-4421...",
+  "content": "Rechnung Nr. 2026-4421\nTelekom Deutschland GmbH\nMonatliche Abrechnung Internet & Festnetz\nGesamtbetrag: 49,95 EUR",
   "filename": "rechnung_telekom.pdf",
-  "sha256": "4b227777d4dd1fc61c6f884f48641d02b4d121d3fd328cb08b5531fcacdabf8a"
+  "sha256": "4b227777d4dd1fc61c6f884f48641d02b4d121d3fd328cb08b5531fcacdabf8a",
+  "header_content": null
 }
 ```
 
@@ -104,12 +119,34 @@ Takes document text and returns predicted document type, tax relevance evaluatio
   "doc_type_confidence": 0.91,
   "is_tax_relevant": true,
   "tax_confidence": 0.86,
-  "tax_category": "werbungskosten",
+  "tax_category": "steuer:werbungskosten",
   "tax_review_required": false,
-  "predicted_tags": ["Telekommunikation"],
+  "predicted_tags": [
+    "Telekommunikation"
+  ],
   "tag_scores": {
     "Telekommunikation": 0.89
-  }
+  },
+  "matched_anchors": [
+    {
+      "name": "Rechnung",
+      "category": "doc_type",
+      "similarity": 0.91,
+      "confident": true,
+      "ambiguous": false
+    },
+    {
+      "name": "steuer:werbungskosten",
+      "category": "tax",
+      "similarity": 0.86,
+      "knn_tax_score": 0.0
+    },
+    {
+      "name": "Telekommunikation",
+      "category": "theme",
+      "similarity": 0.89
+    }
+  ]
 }
 ```
 
@@ -117,14 +154,66 @@ Takes document text and returns predicted document type, tax relevance evaluatio
 
 ## CLI Usage
 
-The CLI tool `vector-classifier` provides commands for batch operations, collection schema initialization, and offline audit passes:
+The service provides a Typer CLI via `uv run vector-classifier` (or `python -m vector_classifier.cli`).
+
+### `info`
+
+Displays the current active configuration, Ollama/Qdrant connection endpoints, and classification thresholds:
 
 ```bash
-# Initialize or verify Qdrant collection schema
-uv run vector-classifier ensure-collection
+uv run vector-classifier info
+```
 
-# Run an offline dry-run audit pass
-uv run vector-classifier audit --limit 50 --output-csv audit_results.csv
+### `version`
+
+Displays the package version:
+
+```bash
+uv run vector-classifier version
+```
+
+### `run`
+
+Starts the FastAPI server with `uvicorn`:
+
+```bash
+# Start server on default host and port (0.0.0.0:8000)
+uv run vector-classifier run
+
+# Start server with live reload and custom port
+uv run vector-classifier run --host 127.0.0.1 --port 8080 --reload
+```
+
+### `audit`
+
+Executes batch vector classification and offline evaluation against exported Paperless document dumps (JSON or JSONL):
+
+```bash
+# Dry-run audit on documents without writing changes
+uv run vector-classifier audit --source documents.jsonl --output-csv audit_report.csv
+
+# Process first 50 documents with concurrency limit of 8
+uv run vector-classifier audit --source documents.json --limit 50 --concurrency 8
+
+# Index vectorized documents into Qdrant during audit
+uv run vector-classifier audit --source documents.jsonl --index --output-csv audit_report.csv
+```
+
+**Options:**
+
+- `--source`, `-s`: Path to input JSON (list of document objects) or JSONL file (*required*).
+- `--output-csv`, `-o`: Destination path for tabular CSV evaluation metrics (default: `audit_report.csv`).
+- `--limit`, `-l`: Maximum number of documents to evaluate.
+- `--dry-run` / `--no-dry-run`: Dry-run mode without modifying Paperless (default: `--dry-run`).
+- `--index` / `--no-index`: Whether to upsert vectorized documents into Qdrant (default: `--no-index`).
+- `--concurrency`, `-c`: Maximum concurrent embedding requests to Ollama (default: 4).
+
+### Standalone Audit Script
+
+For convenience, `scripts/vector_audit_pass.py` provides a direct entry point:
+
+```bash
+uv run scripts/vector_audit_pass.py --source export.jsonl --output-csv audit.csv
 ```
 
 ---
@@ -141,22 +230,28 @@ uv sync
 ### Running Tests
 
 ```bash
-# Run pytest with asyncio and mock HTTP fixtures
+# Run full test suite with pytest
 uv run pytest
 
-# Run with test coverage
+# Run with coverage report
 uv run pytest --cov=vector_classifier --cov-report=term-missing
 ```
 
 ### Code Formatting & Quality
 
-Code style is strictly enforced via `ruff` and `ty` in git pre-commit hooks (`prek`).
+Code style and types are checked automatically via pre-commit hooks (`prek`) on `git commit`:
+
+- `ruff check` and `ruff format`
+- `ty check`
+- `markdownlint-cli2`
 
 ---
 
 ## Documentation
 
 - [Technical Specification](docs/spec.md) — Comprehensive specification of vectors, collections, and scoring algorithms.
+- [Project Structure](docs/project-structure.md) — Codebase architecture and module map.
+- [Domain Modeling](docs/domain.md) — Deep dive into named vectors, semantic anchors, three-zone tax logic, and UUIDv5 indexing.
 - [Implementation Tickets](docs/issues/) — Modular work packages (01 to 06).
 - [Agent Guidelines](AGENTS.md) — Rules, commands, and conventions for coding agents.
 
