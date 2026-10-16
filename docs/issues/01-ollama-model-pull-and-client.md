@@ -1,6 +1,6 @@
 # 01: Ollama BGE-M3 Model Deployment & Asynchroner Embedding-Client
 
-**Status:** ready-for-agent
+**Status:** completed
 **Blocked by:** None (can start immediately)
 
 ## What to build
@@ -18,8 +18,8 @@
 
 ## Acceptance Criteria
 
-- [ ] `bge-m3` ist in Ollama auf dem Cluster verfügbar (`ollama list` zeigt `bge-m3`).
-- [ ] `OllamaEmbeddingClient` ist in `custom_classifier/vectors/client.py` implementiert.
-- [ ] Methoden erzeugen konsistent 1.024-dimensionale Float-Vektoren.
-- [ ] Konfigurierbare Fallbacks für lokale Entwicklung (z. B. via `localhost:11434` oder K8s Port-Forward).
-- [ ] Unit-Tests mit Mock-Responses für Erfolgs- und Fehlerfälle laufen grün.
+- [x] `bge-m3` ist in Ollama auf dem Cluster verfügbar (`ollama list` zeigt `bge-m3`).
+- [x] `OllamaEmbeddingClient` ist in `src/vector_classifier/vectors/client.py` implementiert.
+- [x] Methoden erzeugen konsistent 1.024-dimensionale Float-Vektoren.
+- [x] Konfigurierbare Fallbacks für lokale Entwicklung (z. B. via `localhost:11434` oder K8s Port-Forward).
+- [x] Unit-Tests mit Mock-Responses für Erfolgs- und Fehlerfälle laufen grün.

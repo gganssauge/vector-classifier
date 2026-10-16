@@ -1,6 +1,6 @@
 # Spezifikation: Qdrant Vektor-Klassifikation mit BGE-M3 (Dokumenttypen & Steuerrelevanz)
 
-Status: ready-for-agent
+Status: implemented
 
 ## Problem Statement
 

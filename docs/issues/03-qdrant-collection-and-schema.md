@@ -1,11 +1,11 @@
 # 03: Qdrant Collection Layout & Idempotentes Schema-Management
 
-**Status:** ready-for-agent
+**Status:** completed
 **Blocked by:** 01-ollama-model-pull-and-client
 
 ## What to build
 
-1. **Qdrant Storage Manager (`custom_classifier/vectors/qdrant.py`):**
+1. **Qdrant Storage Manager (`src/vector_classifier/vectors/qdrant.py`):**
    - Asynchroner Client für Qdrant (unter Nutzung von `qdrant-client` oder direktem REST-Client).
    - Konfigurierbare Endpoints über `QDRANT_HOST` (Default: `qdrant.ai.svc.cluster.local`), `QDRANT_PORT` (Default: `6333`), `QDRANT_COLLECTION` (Default: `paperless_documents`).
 2. **Idempotente Collection-Initialisierung (`ensure_collection`):**
@@ -26,8 +26,8 @@
 
 ## Acceptance Criteria
 
-- [ ] Collection `paperless_documents` wird mit zwei 1024-dimensionalen Cosine-Vektoren angelegt.
-- [ ] Point-IDs basieren deterministisch auf dem Content-Hash (keine zufälligen UUIDs).
-- [ ] Upsert ist idempotent (erneutes Ausführen überschreibt identische Punkte ohne Duplikate).
-- [ ] Payload-Filterung nach `is_tax_relevant`, `paperless_id` und `doc_type` funktioniert performant.
-- [ ] Unit-Tests mit Mock-Qdrant prüfen Initialisierung und Upsert-Payloads.
+- [x] Collection `paperless_documents` wird mit zwei 1024-dimensionalen Cosine-Vektoren angelegt.
+- [x] Point-IDs basieren deterministisch auf dem Content-Hash (keine zufälligen UUIDs).
+- [x] Upsert ist idempotent (erneutes Ausführen überschreibt identische Punkte ohne Duplikate).
+- [x] Payload-Filterung nach `is_tax_relevant`, `paperless_id` und `doc_type` funktioniert performant.
+- [x] Unit-Tests mit Mock-Qdrant prüfen Initialisierung und Upsert-Payloads.

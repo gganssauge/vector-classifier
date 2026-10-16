@@ -1,6 +1,6 @@
 # 05: Batch-Indexer & Offline-Audit-Runner CLI
 
-**Status:** ready-for-agent
+**Status:** completed
 **Blocked by:** 04-vector-classifier-engine
 
 ## What to build
@@ -27,7 +27,7 @@
 
 ## Acceptance Criteria
 
-- [ ] CLI-Skript kann mit `--dry-run` und `--limit 20` fehlerfrei ausgeführt werden.
-- [ ] Drosselung/Concurrency verhindert Timeouts an der Ollama-Schnittstelle.
-- [ ] CSV-Auditdatei wird mit allen relevanten Diagnose- und Vergleichsspalten erzeugt.
-- [ ] Konsolenausgabe liefert verständliche statistische Kennzahlen zur Erkennungsqualität.
+- [x] CLI-Skript kann mit `--dry-run` und `--limit 20` fehlerfrei ausgeführt werden.
+- [x] Drosselung/Concurrency verhindert Timeouts an der Ollama-Schnittstelle.
+- [x] CSV-Auditdatei wird mit allen relevanten Diagnose- und Vergleichsspalten erzeugt.
+- [x] Konsolenausgabe liefert verständliche statistische Kennzahlen zur Erkennungsqualität.

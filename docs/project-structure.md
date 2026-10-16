@@ -40,7 +40,8 @@ vector-classifier/
 └── docs/
     ├── spec.md                   # Architectural specification
     ├── project-structure.md      # This file
-    ├── domain.md                 # Domain models, scoring thresholds & vectors
+    ├── agents/
+    │   └── domain.md             # Domain models, scoring thresholds & vectors
     └── issues/                   # Modular implementation tickets (01 to 06)
 ```
 

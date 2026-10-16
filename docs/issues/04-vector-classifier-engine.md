@@ -1,11 +1,11 @@
 # 04: Vektor-Klassifikations-Engine (Dokumenttyp & Hybride Steuerrelevanz)
 
-**Status:** ready-for-agent
+**Status:** completed
 **Blocked by:** 01-ollama-model-pull-and-client, 02-semantic-anchors-catalogue, 03-qdrant-collection-and-schema
 
 ## What to build
 
-1. **Klassifikations-Engine (`custom_classifier/vectors/classifier.py`):**
+1. **Klassifikations-Engine (`src/vector_classifier/vectors/classifier.py`):**
    - Bindeglied zwischen Ollama-Embeddings, semantischen Ankern und Qdrant-Nachbarschaften.
 2. **Dokumenttyp-Klassifikation:**
    - Berechnet Ähnlichkeit des `header`-Vektors gegen die 12 vorab eingebetteten Dokumenttyp-Anker.
@@ -38,8 +38,8 @@
 
 ## Acceptance Criteria
 
-- [ ] Dokumenttypen werden mit Ähnlichkeitswerten aus `header`-Vektoren gegen Anker bestimmt.
-- [ ] Steuerrelevanz kombiniert semantische Steuer-Anker und k-NN-Vorjahresnachbarn.
-- [ ] Schwellenwerte für `steuerrelevant` ($\ge 0{,}82$) und `steuer-review` ($0{,}70\text{--}0{,}81$) werden exakt eingehalten.
-- [ ] Multi-Label Tagging weist alle qualifizierten Makro-Tags ($\ge 0{,}78$) sauber als Liste zu.
-- [ ] Vollständige Unit-Tests mit synthetischen Vektoren verifizieren die mathematische Zuordnung und Randfälle.
+- [x] Dokumenttypen werden mit Ähnlichkeitswerten aus `header`-Vektoren gegen Anker bestimmt.
+- [x] Steuerrelevanz kombiniert semantische Steuer-Anker und k-NN-Vorjahresnachbarn.
+- [x] Schwellenwerte für `steuerrelevant` ($\ge 0{,}82$) und `steuer-review` ($0{,}70\text{--}0{,}81$) werden exakt eingehalten.
+- [x] Multi-Label Tagging weist alle qualifizierten Makro-Tags ($\ge 0{,}78$) sauber als Liste zu.
+- [x] Vollständige Unit-Tests mit synthetischen Vektoren verifizieren die mathematische Zuordnung und Randfälle.

@@ -251,7 +251,7 @@ Code style and types are checked automatically via pre-commit hooks (`prek`) on 
 
 - [Technical Specification](docs/spec.md) — Comprehensive specification of vectors, collections, and scoring algorithms.
 - [Project Structure](docs/project-structure.md) — Codebase architecture and module map.
-- [Domain Modeling](docs/domain.md) — Deep dive into named vectors, semantic anchors, three-zone tax logic, and UUIDv5 indexing.
+- [Domain Modeling](docs/agents/domain.md) — Deep dive into named vectors, semantic anchors, three-zone tax logic, and UUIDv5 indexing.
 - [Implementation Tickets](docs/issues/) — Modular work packages (01 to 06).
 - [Agent Guidelines](AGENTS.md) — Rules, commands, and conventions for coding agents.
 

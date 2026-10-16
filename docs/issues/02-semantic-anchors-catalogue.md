@@ -1,11 +1,11 @@
 # 02: Semantischer Anker-Katalog für Dokumenttypen & Steuer-Kategorien
 
-**Status:** ready-for-agent
+**Status:** completed
 **Blocked by:** None
 
 ## What to build
 
-1. **Strukturierte Typdefinitionen (`custom_classifier/vectors/anchors.py`):**
+1. **Strukturierte Typdefinitionen (`src/vector_classifier/vectors/anchors.py`):**
    - `SemanticAnchor`: Datenklasse mit `name: str`, `category: str`, `description: str`, `keywords: list[str]`.
 2. **Katalog der 12 kanonischen Dokumenttypen:**
    - Reichhaltige deutsche Beschreibungstexte für jeden Typ:
@@ -45,9 +45,9 @@
 
 ## Acceptance Criteria
 
-- [ ] Alle 12 kanonischen Dokumenttypen verfügen über mehrzeilige, präzise und layout-spezifische deutsche Beschreibungen.
-- [ ] Alle 5 steuerlichen Abzugsklassen sind mit differenzierten Begriffen und rechtlichen Kontexten abgebildet.
-- [ ] Alle 14 thematischen Tag-Taxonomie-Klassen verfügen über detaillierte Kontextanker und Alttag-Cluster.
-- [ ] Helper-Funktionen `get_document_type_anchors()`, `get_tax_anchors()` und `get_thematic_tag_anchors()` stehen zur Verfügung.
-- [ ] Pydantic-/Dataclass-Validierung stellt sicher, dass keine leeren Beschreibungen existieren.
-- [ ] Unit-Tests verifizieren die Vollständigkeit des Katalogs.
+- [x] Alle 12 kanonischen Dokumenttypen verfügen über mehrzeilige, präzise und layout-spezifische deutsche Beschreibungen.
+- [x] Alle 5 steuerlichen Abzugsklassen sind mit differenzierten Begriffen und rechtlichen Kontexten abgebildet.
+- [x] Alle 14 thematischen Tag-Taxonomie-Klassen verfügen über detaillierte Kontextanker und Alttag-Cluster.
+- [x] Helper-Funktionen `get_document_type_anchors()`, `get_tax_anchors()` und `get_thematic_tag_anchors()` stehen zur Verfügung.
+- [x] Pydantic-/Dataclass-Validierung stellt sicher, dass keine leeren Beschreibungen existieren.
+- [x] Unit-Tests verifizieren die Vollständigkeit des Katalogs.
