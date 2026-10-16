@@ -40,6 +40,9 @@ class ClassifyResponse(BaseModel):
 class VectorClassificationResult(ClassifyResponse):
     """Result of vector classification pipeline."""
 
+    header_vector: list[float] | None = None
+    content_vector: list[float] | None = None
+
 
 class HealthResponse(BaseModel):
     """Health check status response."""

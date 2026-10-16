@@ -45,5 +45,76 @@ def run(
     uvicorn.run("vector_classifier.main:app", host=host, port=port, reload=reload)
 
 
+@app.command()
+def audit(
+    source: str = typer.Option(
+        ...,
+        "--source",
+        "-s",
+        help="Path to input JSON or JSONL document file",
+    ),
+    output_csv: str = typer.Option(
+        "audit_report.csv",
+        "--output-csv",
+        "-o",
+        help="Path for tabular CSV evaluation output",
+    ),
+    limit: int | None = typer.Option(
+        None,
+        "--limit",
+        "-l",
+        help="Limit number of documents to process",
+    ),
+    dry_run: bool = typer.Option(
+        True,
+        "--dry-run/--no-dry-run",
+        help="Dry-run mode: do not write changes to Paperless",
+    ),
+    concurrency: int = typer.Option(
+        4,
+        "--concurrency",
+        "-c",
+        help="Maximum concurrent embedding requests",
+    ),
+    index: bool = typer.Option(
+        False,
+        "--index/--no-index",
+        help="Upsert vectorized documents into Qdrant",
+    ),
+) -> None:
+    """Run batch classification and offline audit evaluation on documents."""
+    import asyncio
+
+    from vector_classifier.audit import AuditRunner
+
+    console.print("[bold cyan]Starting Vector Classifier Audit Pass...[/bold cyan]")
+    console.print(f"  Source file:  {source}")
+    console.print(f"  Output CSV:   {output_csv}")
+    console.print(f"  Dry run:      {dry_run}")
+    console.print(f"  Index Qdrant: {index}")
+    console.print(f"  Concurrency:  {concurrency}")
+    if limit is not None:
+        console.print(f"  Limit:        {limit}")
+
+    runner = AuditRunner(
+        concurrency=concurrency,
+        index=index,
+        dry_run=dry_run,
+    )
+
+    async def _execute() -> None:
+        try:
+            await runner.run(
+                source=source,
+                output_csv=output_csv,
+                limit=limit,
+                console=console,
+            )
+        finally:
+            await runner.close()
+
+    asyncio.run(_execute())
+
+
 if __name__ == "__main__":
     app()

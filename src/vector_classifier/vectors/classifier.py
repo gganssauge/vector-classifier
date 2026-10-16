@@ -346,4 +346,6 @@ class VectorClassifierEngine:
             tax_category=tax_cat,
             tax_review_required=tax_review,
             matched_anchors=doc_anchors + tax_anchors + theme_anchors,
+            header_vector=header_vector,
+            content_vector=content_vector,
         )
