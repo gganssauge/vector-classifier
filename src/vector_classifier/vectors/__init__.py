@@ -1,9 +1,15 @@
-"""Vector operations and anchors module."""
+"""Vector operations, anchors, and classification engine module."""
 
+from vector_classifier.models.schemas import VectorClassificationResult
 from vector_classifier.vectors.anchors import (
     get_document_type_anchors,
     get_tax_anchors,
     get_thematic_tag_anchors,
+)
+from vector_classifier.vectors.classifier import (
+    VectorClassifierEngine,
+    cosine_similarity,
+    extract_header_content,
 )
 from vector_classifier.vectors.client import (
     OllamaClientError,
@@ -26,6 +32,10 @@ __all__ = [
     "QdrantConnectionError",
     "QdrantStorageError",
     "QdrantStorageManager",
+    "VectorClassificationResult",
+    "VectorClassifierEngine",
+    "cosine_similarity",
+    "extract_header_content",
     "generate_point_id",
     "get_document_type_anchors",
     "get_tax_anchors",

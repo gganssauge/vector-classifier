@@ -1,5 +1,7 @@
 """Pydantic schemas for requests, responses, and anchors."""
 
+from typing import Any
+
 from pydantic import BaseModel, Field
 
 
@@ -32,6 +34,11 @@ class ClassifyResponse(BaseModel):
     tax_confidence: float = 0.0
     tax_category: str | None = None
     tax_review_required: bool = False
+    matched_anchors: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class VectorClassificationResult(ClassifyResponse):
+    """Result of vector classification pipeline."""
 
 
 class HealthResponse(BaseModel):
