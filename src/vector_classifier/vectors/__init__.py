@@ -6,6 +6,13 @@ from vector_classifier.vectors.anchors import (
     get_tax_anchors,
     get_thematic_tag_anchors,
 )
+from vector_classifier.vectors.audit import (
+    AUDIT_CSV_COLUMNS,
+    AuditRecord,
+    AuditRunner,
+    AuditSummary,
+    run_audit,
+)
 from vector_classifier.vectors.classifier import (
     VectorClassifierEngine,
     cosine_similarity,
@@ -25,6 +32,10 @@ from vector_classifier.vectors.qdrant import (
 )
 
 __all__ = [
+    "AUDIT_CSV_COLUMNS",
+    "AuditRecord",
+    "AuditRunner",
+    "AuditSummary",
     "OllamaClientError",
     "OllamaConnectionError",
     "OllamaEmbeddingClient",
@@ -40,4 +51,5 @@ __all__ = [
     "get_document_type_anchors",
     "get_tax_anchors",
     "get_thematic_tag_anchors",
+    "run_audit",
 ]
