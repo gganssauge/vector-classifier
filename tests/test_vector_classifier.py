@@ -472,3 +472,111 @@ async def test_knn_string_tag_payload():
     result = await engine.classify(content="Dokument")
     assert "Gesundheit" in result.predicted_tags
     assert result.tag_scores["Gesundheit"] == 1.0
+
+
+@pytest.mark.asyncio
+async def test_knn_tax_weighted_score_and_cluster_selection():
+    """Verify weighted score calculation across top-5 neighbors and category cluster selection."""
+    mock_ollama = AsyncMock(spec=OllamaEmbeddingClient)
+    mock_ollama.get_document_embeddings.return_value = ([0.0] * 8, [0.0] * 8)
+
+    # Baseline anchors return low similarity (0.40)
+    anchor_dict = {
+        a.name: make_unit_vector_with_similarity(0.40, dim=8) for a in get_tax_anchors()
+    }
+
+    # 3 neighbors: 2 in werbungskosten (0.90, 0.85) and 1 in sonderausgaben (0.80)
+    # Sum of scores = 2.55, sum of squares = 0.81 + 0.7225 + 0.64 = 2.1725
+    # Weighted score = round(2.1725 / 2.55, 4) = 0.8520
+    # Cluster weights: werbungskosten = 1.75, sonderausgaben = 0.80
+    p1 = ScoredPoint(
+        id="1",
+        version=1,
+        score=0.90,
+        payload={"is_tax_relevant": True, "tax_category": "steuer:werbungskosten"},
+        vector=None,
+    )
+    p2 = ScoredPoint(
+        id="2",
+        version=1,
+        score=0.85,
+        payload={"is_tax_relevant": True, "tax_category": "steuer:werbungskosten"},
+        vector=None,
+    )
+    p3 = ScoredPoint(
+        id="3",
+        version=1,
+        score=0.80,
+        payload={"is_tax_relevant": True, "tax_category": "steuer:sonderausgaben"},
+        vector=None,
+    )
+
+    mock_qdrant = AsyncMock(spec=QdrantStorageManager)
+    mock_qdrant.search_by_vector.side_effect = lambda vector_name, **kwargs: (
+        [p1, p2, p3] if kwargs.get("filter_criteria") else []
+    )
+
+    engine = VectorClassifierEngine(
+        ollama_client=mock_ollama,
+        qdrant_manager=mock_qdrant,
+        anchor_embeddings=anchor_dict,
+    )
+    result = await engine.classify(content="Notebook Rechnung")
+
+    assert result.is_tax_relevant is True
+    assert result.tax_review_required is False
+    assert result.tax_confidence == 0.8520
+    assert result.tax_category == "steuer:werbungskosten"
+
+
+@pytest.mark.asyncio
+async def test_knn_canonical_macro_tag_mapping():
+    """Verify raw tags from neighbor payloads map to canonical macro-tags before voting."""
+    mock_ollama = AsyncMock(spec=OllamaEmbeddingClient)
+    mock_ollama.get_document_embeddings.return_value = ([0.0] * 8, [0.0] * 8)
+
+    anchor_dict = {a.name: [0.0] * 8 for a in get_thematic_tag_anchors()}
+
+    # p1 has "kfz" (maps to Fahrzeug) and an unmapped tag
+    # p2 has "auto" (also maps to Fahrzeug)
+    # p3 has "strom" (maps to Energie, 1 vote only)
+    # p4 and p5 have unmapped custom tags
+    p1 = ScoredPoint(
+        id="1",
+        version=1,
+        score=0.8,
+        payload={"tags": ["kfz", "custom-unmapped"]},
+        vector=None,
+    )
+    p2 = ScoredPoint(
+        id="2", version=1, score=0.8, payload={"tags": ["auto"]}, vector=None
+    )
+    p3 = ScoredPoint(
+        id="3", version=1, score=0.8, payload={"tags": ["strom"]}, vector=None
+    )
+    p4 = ScoredPoint(
+        id="4", version=1, score=0.8, payload={"tags": ["random-tag"]}, vector=None
+    )
+    p5 = ScoredPoint(
+        id="5", version=1, score=0.8, payload={"tags": ["Sonstiges"]}, vector=None
+    )
+
+    mock_qdrant = AsyncMock(spec=QdrantStorageManager)
+    mock_qdrant.search_by_vector.side_effect = lambda vector_name, **kwargs: (
+        [] if kwargs.get("filter_criteria") else [p1, p2, p3, p4, p5]
+    )
+
+    engine = VectorClassifierEngine(
+        ollama_client=mock_ollama,
+        qdrant_manager=mock_qdrant,
+        anchor_embeddings=anchor_dict,
+    )
+    result = await engine.classify(content="Kfz Inspektion")
+
+    # "Fahrzeug" has 2 neighbor votes (>= 2) -> assigned
+    assert "Fahrzeug" in result.predicted_tags
+    # "Energie" has only 1 neighbor vote (< 2) -> excluded
+    assert "Energie" not in result.predicted_tags
+    # Unmapped tags and "Sonstiges" -> excluded
+    assert "custom-unmapped" not in result.predicted_tags
+    assert "Sonstiges" not in result.predicted_tags

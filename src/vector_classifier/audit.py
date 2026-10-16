@@ -6,18 +6,19 @@ generates detailed CSV audit reports, and provides Rich console summaries.
 
 import asyncio
 import csv
-import hashlib
 import json
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import httpx
 from pydantic import BaseModel
 from rich.console import Console
 from rich.table import Table
 
 from vector_classifier.config import settings
+from vector_classifier.models.schemas import AuditDocument
 from vector_classifier.vectors.classifier import (
     VectorClassifierEngine,
     extract_header_content,
@@ -152,46 +153,73 @@ def is_tax_tagged(doc: dict[str, Any], tags: list[str]) -> bool:
     return False
 
 
-def load_documents_from_file(
+def _extract_documents_from_payload(payload: Any) -> list[dict[str, Any]]:
+    """Extract list of document dicts from parsed JSON payload."""
+    if isinstance(payload, list):
+        return [doc for doc in payload if isinstance(doc, dict)]
+    if isinstance(payload, dict):
+        if "results" in payload and isinstance(payload["results"], list):
+            return [doc for doc in payload["results"] if isinstance(doc, dict)]
+        if "documents" in payload and isinstance(payload["documents"], list):
+            return [doc for doc in payload["documents"] if isinstance(doc, dict)]
+        if "data" in payload and isinstance(payload["data"], list):
+            return [doc for doc in payload["data"] if isinstance(doc, dict)]
+        return [payload]
+    return []
+
+
+def _parse_json_or_jsonl(text: str) -> list[dict[str, Any]]:
+    """Parse text content as either JSON structure or JSONL lines."""
+    text_stripped = text.strip()
+    if not text_stripped:
+        return []
+    try:
+        parsed = json.loads(text_stripped)
+        return _extract_documents_from_payload(parsed)
+    except json.JSONDecodeError:
+        pass
+
+    documents: list[dict[str, Any]] = []
+    for line in text_stripped.splitlines():
+        line_str = line.strip()
+        if line_str:
+            item = json.loads(line_str)
+            if isinstance(item, dict):
+                documents.append(item)
+    return documents
+
+
+def load_documents(
     source: str | Path, limit: int | None = None
 ) -> list[dict[str, Any]]:
-    """Load documents from JSON or JSONL file with optional limit."""
-    source_path = Path(source)
-    if not source_path.exists():
-        raise FileNotFoundError(f"Input file not found: {source_path}")
-
-    text = source_path.read_text(encoding="utf-8").strip()
-    documents: list[dict[str, Any]] = []
-
-    if source_path.suffix.lower() == ".jsonl":
-        for line in text.splitlines():
-            line_str = line.strip()
-            if line_str:
-                documents.append(json.loads(line_str))
+    """Load documents from JSON/JSONL file path or HTTP/HTTPS Paperless API URL."""
+    source_str = str(source)
+    if source_str.startswith(("http://", "https://")):
+        with httpx.Client(timeout=30.0) as client:
+            resp = client.get(source_str)
+            resp.raise_for_status()
+            try:
+                parsed = resp.json()
+                documents = _extract_documents_from_payload(parsed)
+            except Exception:
+                documents = _parse_json_or_jsonl(resp.text)
     else:
-        try:
-            parsed = json.loads(text)
-            if isinstance(parsed, list):
-                documents = parsed
-            elif isinstance(parsed, dict):
-                if "results" in parsed and isinstance(parsed["results"], list):
-                    documents = parsed["results"]
-                elif "documents" in parsed and isinstance(parsed["documents"], list):
-                    documents = parsed["documents"]
-                elif "data" in parsed and isinstance(parsed["data"], list):
-                    documents = parsed["data"]
-                else:
-                    documents = [parsed]
-        except json.JSONDecodeError:
-            # Fallback for jsonl with .json extension
-            for line in text.splitlines():
-                line_str = line.strip()
-                if line_str:
-                    documents.append(json.loads(line_str))
+        source_path = Path(source)
+        if not source_path.exists():
+            raise FileNotFoundError(f"Input file not found: {source_path}")
+        text = source_path.read_text(encoding="utf-8")
+        documents = _parse_json_or_jsonl(text)
 
     if limit is not None and limit > 0:
         documents = documents[:limit]
     return documents
+
+
+def load_documents_from_file(
+    source: str | Path, limit: int | None = None
+) -> list[dict[str, Any]]:
+    """Load documents from file or URL with optional limit (alias for load_documents)."""
+    return load_documents(source, limit=limit)
 
 
 class AuditRunner:
@@ -207,11 +235,19 @@ class AuditRunner:
         target_collection: str | None = None,
     ) -> None:
         self.engine = engine if engine is not None else VectorClassifierEngine()
-        self.qdrant_manager = qdrant_manager
+        self.target_collection = target_collection
+        if qdrant_manager is not None:
+            self.qdrant_manager = qdrant_manager
+            if target_collection:
+                self.qdrant_manager.collection = target_collection
+        elif index or not dry_run or target_collection:
+            self.qdrant_manager = QdrantStorageManager(collection=target_collection)
+        else:
+            self.qdrant_manager = None
+
         self.concurrency = max(1, concurrency)
         self.index = index
         self.dry_run = dry_run
-        self.target_collection = target_collection
         self._owns_engine = engine is None
 
     async def close(self) -> None:
@@ -221,56 +257,18 @@ class AuditRunner:
         if self.qdrant_manager is not None:
             await self.qdrant_manager.close()
 
-    async def process_document(self, doc: dict[str, Any]) -> AuditRecord:
+    async def process_document(
+        self, doc: AuditDocument | dict[str, Any]
+    ) -> AuditRecord:
         """Classify a single document and optionally index into Qdrant."""
-        content = doc.get("content") or doc.get("body") or doc.get("text") or ""
-        filename = (
-            doc.get("original_file_name")
-            or doc.get("filename")
-            or doc.get("title")
-            or ""
-        )
-        paperless_id = (
-            doc.get("paperless_id")
-            if doc.get("paperless_id") is not None
-            else doc.get("id")
-            if doc.get("id") is not None
-            else doc.get("pk")
-        )
-        if paperless_id is not None:
-            try:
-                paperless_id = int(paperless_id)
-            except ValueError, TypeError:
-                pass
-        else:
-            paperless_id = ""
-
-        # Content SHA-256
-        sha256 = (
-            doc.get("content_sha256")
-            or doc.get("sha256")
-            or doc.get("hash")
-            or hashlib.sha256(content.encode("utf-8")).hexdigest()
-        )
-
-        # Current Doc Type
-        raw_doc_type = (
-            doc.get("current_doc_type")
-            or doc.get("doc_type_original")
-            or doc.get("doc_type")
-            or doc.get("document_type")
-            or doc.get("document_type_name")
-        )
-        if isinstance(raw_doc_type, dict) and "name" in raw_doc_type:
-            current_doc_type = str(raw_doc_type["name"]).strip()
-        elif raw_doc_type is not None:
-            current_doc_type = str(raw_doc_type).strip()
-        else:
-            current_doc_type = ""
-
-        # Current Tags & Tax Status
-        current_tags_list = extract_current_tags(doc)
-        currently_tax_tagged = is_tax_tagged(doc, current_tags_list)
+        audit_doc = AuditDocument.from_raw(doc)
+        content = audit_doc.content
+        filename = audit_doc.filename
+        paperless_id = audit_doc.paperless_id
+        sha256 = audit_doc.content_sha256
+        current_doc_type = audit_doc.current_doc_type
+        current_tags_list = audit_doc.current_tags
+        currently_tax_tagged = audit_doc.is_currently_tax_tagged
 
         # Vector Classification
         result = await self.engine.classify(
@@ -297,6 +295,8 @@ class AuditRunner:
 
         # Optional Qdrant Upsert
         if self.index and self.qdrant_manager is not None:
+            if self.target_collection:
+                self.qdrant_manager.collection = self.target_collection
             header_vector = result.header_vector
             content_vector = result.content_vector
             if header_vector is None or content_vector is None:
@@ -357,16 +357,19 @@ class AuditRunner:
         console: Console | None = None,
     ) -> tuple[list[AuditRecord], AuditSummary]:
         """Execute audit pass on documents from source."""
-        documents = load_documents_from_file(source, limit=limit)
+        raw_documents = load_documents(source, limit=limit)
+        documents = [AuditDocument.from_raw(d) for d in raw_documents]
 
         if self.index and self.qdrant_manager is not None:
+            if self.target_collection:
+                self.qdrant_manager.collection = self.target_collection
             await self.qdrant_manager.ensure_collection()
 
         await self.engine.initialize_anchor_embeddings()
 
         semaphore = asyncio.Semaphore(self.concurrency)
 
-        async def _worker(doc: dict[str, Any]) -> AuditRecord:
+        async def _worker(doc: AuditDocument) -> AuditRecord:
             async with semaphore:
                 return await self.process_document(doc)
 
@@ -460,6 +463,7 @@ async def run_audit(
     index: bool = False,
     engine: VectorClassifierEngine | None = None,
     qdrant_manager: QdrantStorageManager | None = None,
+    target_collection: str | None = None,
     console: Console | None = None,
 ) -> tuple[list[AuditRecord], AuditSummary]:
     """Helper function to execute an audit run."""
@@ -469,6 +473,7 @@ async def run_audit(
         concurrency=concurrency,
         index=index,
         dry_run=dry_run,
+        target_collection=target_collection,
     )
     try:
         return await runner.run(

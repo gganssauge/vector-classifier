@@ -6,6 +6,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+import respx
 from typer.testing import CliRunner
 
 from vector_classifier.audit import (
@@ -14,11 +15,14 @@ from vector_classifier.audit import (
     determine_tax_action,
     extract_current_tags,
     is_tax_tagged,
+    load_documents,
     load_documents_from_file,
     run_audit,
 )
 from vector_classifier.cli import app
-from vector_classifier.models.schemas import VectorClassificationResult
+from vector_classifier.models.schemas import AuditDocument, VectorClassificationResult
+from vector_classifier.vectors.classifier import VectorClassifierEngine
+from vector_classifier.vectors.qdrant import QdrantStorageManager
 
 cli_runner = CliRunner()
 
@@ -406,3 +410,71 @@ def test_cli_audit_command(sample_documents_jsonl: Path, tmp_path: Path):
         assert "Vector Classifier Audit Pass" in result.stdout
         assert "Offline Audit Summary" in result.stdout
         assert output_csv.exists()
+
+
+@respx.mock
+def test_load_documents_from_url():
+    """Verify loading documents from HTTP/HTTPS Paperless API URL."""
+    url = "https://paperless.example.com/api/documents/"
+    respx.get(url).respond(
+        status_code=200,
+        json={
+            "count": 2,
+            "results": [{"id": 501, "title": "Doc1"}, {"id": 502, "title": "Doc2"}],
+        },
+    )
+    docs = load_documents(url)
+    assert len(docs) == 2
+    assert docs[0]["id"] == 501
+    assert docs[1]["id"] == 502
+
+    # Root list response
+    list_url = "https://paperless.example.com/api/list/"
+    respx.get(list_url).respond(
+        status_code=200,
+        json=[{"id": 601, "title": "DirectList"}],
+    )
+    docs_list = load_documents_from_file(list_url)
+    assert len(docs_list) == 1
+    assert docs_list[0]["id"] == 601
+
+
+def test_audit_document_normalization():
+    """Verify AuditDocument.from_raw normalizes varied metadata formats."""
+    raw = {
+        "pk": "42",
+        "title": "rechnung.pdf",
+        "body": "Rechnungstext",
+        "document_type_name": "Rechnung",
+        "tags": [{"name": "Fahrzeug"}, "Steuer"],
+    }
+    doc = AuditDocument.from_raw(raw)
+    assert doc.paperless_id == 42
+    assert doc.filename == "rechnung.pdf"
+    assert doc.content == "Rechnungstext"
+    assert doc.current_doc_type == "Rechnung"
+    assert "Fahrzeug" in doc.current_tags
+    assert "Steuer" in doc.current_tags
+    assert doc.is_currently_tax_tagged is True
+    assert len(doc.content_sha256) == 64
+
+
+@pytest.mark.asyncio
+async def test_audit_runner_target_collection():
+    """Verify target_collection overrides Qdrant collection on the storage manager."""
+    mock_engine = AsyncMock(spec=VectorClassifierEngine)
+    mock_engine.classify.return_value = VectorClassificationResult(
+        predicted_doc_type="Rechnung",
+        doc_type_confidence=0.9,
+    )
+    mock_qdrant = AsyncMock(spec=QdrantStorageManager)
+    mock_qdrant.collection = "original_collection"
+
+    runner = AuditRunner(
+        engine=mock_engine,
+        qdrant_manager=mock_qdrant,
+        target_collection="custom_audit_collection",
+        index=True,
+    )
+    assert runner.target_collection == "custom_audit_collection"
+    assert mock_qdrant.collection == "custom_audit_collection"
