@@ -1,0 +1,87 @@
+[project]
+name = "vector-classifier"
+version = "0.1.0"
+description = "Semantic Vector Classification and Search Service powered by Ollama (bge-m3) and Qdrant"
+readme = "README.md"
+license = { text = "MIT" }
+authors = [
+    { name = "Gottfried Ganßauge", email = "ganssauge@gorki120.de" },
+]
+requires-python = ">=3.15"
+dependencies = [
+    "fastapi",
+    "httpx",
+    "pydantic",
+    "pydantic-settings",
+    "qdrant-client",
+    "rich",
+    "typer",
+    "uvicorn[standard]",
+]
+
+[project.scripts]
+vector-classifier = "vector_classifier.cli:app"
+
+[dependency-groups]
+dev = [
+    "pytest",
+    "pytest-asyncio",
+    "pytest-cov",
+    "respx",
+    "ruff",
+    "ty",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/vector_classifier"]
+
+[tool.pytest.ini_options]
+minversion = "6"
+asyncio_mode = "auto"
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = ["-ra", "--strict-config", "--strict-markers"]
+log_level = "INFO"
+xfail_strict = true
+filterwarnings = ["error"]
+
+[tool.coverage.run]
+relative_files = true
+source = ["vector_classifier"]
+
+[tool.coverage.report]
+show_missing = true
+
+[tool.ty]
+
+[tool.repo-review]
+ignore = [
+    "GH200",  # Maintained by Dependabot (Renovate is used instead)
+    "PC140",  # Uses a type checker (managed via local ty hook)
+    "PC160",  # Uses a spell checker
+    "PC170",  # Uses PyGrep hooks (no rST files)
+    "PC901", "PC902", "PC903",  # Pre-commit CI messages (GitHub Actions CI is used)
+    "PY007",  # Task runner (nox/tox/pixi; uv is used directly)
+    "RF101",  # Flake8-bugbear B checks (conflicts with Typer function call defaults)
+    "SEC001", # zizmor GHA checker
+]
+
+[tool.ruff]
+line-length = 88
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "C901"]
+ignore = [
+    "E501",
+]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 15
+
+[tool.ruff.lint.per-file-ignores]
+"scripts/*" = ["EXE001", "E402", "F401", "F601", "E712", "C901"]
+"tests/*" = ["E402", "F601", "F841", "E712", "C901"]

@@ -1,0 +1,56 @@
+name: CI Pipeline
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*.*.*'
+    paths-ignore: &paths-ignore
+      - '**.md'
+      - 'docs/**'
+      - '.scratch/**'
+      - '.gitignore'
+      - 'LICENSE'
+      - '.pre-commit-config.yaml'
+  pull_request:
+    branches:
+      - main
+    paths-ignore: *paths-ignore
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  test:
+    name: Test & Lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v10.3.0
+        with:
+          enable-cache: true
+          version: "latest"
+
+      - name: Install Python 3.15
+        run: uv python install 3.15
+
+      - name: Install dependencies
+        run: uv sync --all-groups
+
+      - name: Run ruff check
+        run: uv run ruff check .
+
+      - name: Run ruff format check
+        run: uv run ruff format --check .
+
+      - name: Run type check
+        run: uv run ty check
+
+      - name: Run tests with pytest
+        run: uv run pytest --cov=vector_classifier --cov-report=term-missing

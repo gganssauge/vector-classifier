@@ -1,0 +1,5 @@
+config:
+  MD013: false  # Line length
+  MD024: false  # Multiple headers with same content
+  MD033: false  # Inline HTML
+  MD042: false  # No empty links
