@@ -1,5 +1,6 @@
 """Qdrant storage manager and schema management."""
 
+import asyncio
 import logging
 import uuid
 from typing import Any
@@ -145,6 +146,7 @@ class QdrantStorageManager:
                     collection_name=self.collection,
                     field_name=field_name,
                     field_schema=schema_type,
+                    wait=False,
                 )
         except Exception as e:
             logger.error("Failed to ensure collection '%s': %s", self.collection, e)
@@ -158,6 +160,10 @@ class QdrantStorageManager:
             if await self.client.collection_exists(self.collection):
                 logger.info("Dropping existing collection '%s'", self.collection)
                 await self.client.delete_collection(self.collection)
+                await asyncio.sleep(1.0)
+                if not self._external_client and self._client is not None:
+                    await self._client.close()
+                    self._client = None
             await self.ensure_collection()
         except Exception as e:
             logger.error("Failed to recreate collection '%s': %s", self.collection, e)
