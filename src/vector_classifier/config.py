@@ -49,6 +49,20 @@ class Settings(BaseSettings):
         validation_alias="QDRANT_TIMEOUT",
     )
 
+    # Paperless settings
+    paperless_base_url: str = Field(
+        default="https://paperless.gorki120.de",
+        validation_alias="PAPERLESS_BASE_URL",
+    )
+    paperless_api_token: str = Field(
+        default="",
+        validation_alias="PAPERLESS_API_TOKEN",
+    )
+    paperless_timeout: float = Field(
+        default=60.0,
+        validation_alias="PAPERLESS_TIMEOUT",
+    )
+
     # Server settings
     host: str = Field(default="0.0.0.0", validation_alias="HOST")
     port: int = Field(default=8000, validation_alias="PORT")

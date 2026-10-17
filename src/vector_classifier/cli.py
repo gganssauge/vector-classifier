@@ -116,5 +116,75 @@ def audit(
     asyncio.run(_execute())
 
 
+@app.command()
+def ingest(
+    url: str = typer.Option(
+        settings.paperless_base_url,
+        "--url",
+        "-u",
+        help="Paperless REST API Base URL",
+    ),
+    token: str = typer.Option(
+        settings.paperless_api_token,
+        "--token",
+        "-t",
+        help="Paperless API Authorization Token",
+    ),
+    concurrency: int = typer.Option(
+        8,
+        "--concurrency",
+        "-c",
+        help="Concurrent embedding requests to Ollama",
+    ),
+    batch_size: int = typer.Option(
+        50,
+        "--batch-size",
+        "-b",
+        help="Number of documents per Qdrant upsert batch",
+    ),
+    recreate: bool = typer.Option(
+        False,
+        "--recreate/--no-recreate",
+        help="Recreate Qdrant collection fresh before ingestion",
+    ),
+    limit: int | None = typer.Option(
+        None,
+        "--limit",
+        "-l",
+        help="Limit number of documents to ingest",
+    ),
+) -> None:
+    """Ingest documents from Paperless-ngx into Qdrant vector database."""
+    import asyncio
+
+    from vector_classifier.ingest import PaperlessIngestRunner
+
+    console.print(
+        "[bold cyan]Starting Paperless Document Ingestion into Qdrant...[/bold cyan]"
+    )
+    console.print(f"  Paperless URL: {url}")
+    console.print(f"  Concurrency:   {concurrency}")
+    console.print(f"  Batch size:    {batch_size}")
+    console.print(f"  Recreate coll: {recreate}")
+    if limit is not None:
+        console.print(f"  Limit:         {limit}")
+
+    runner = PaperlessIngestRunner(
+        paperless_url=url,
+        paperless_token=token,
+        concurrency=concurrency,
+        batch_size=batch_size,
+        recreate_collection=recreate,
+    )
+
+    async def _execute() -> None:
+        try:
+            await runner.run(limit=limit, console=console)
+        finally:
+            await runner.close()
+
+    asyncio.run(_execute())
+
+
 if __name__ == "__main__":
     app()

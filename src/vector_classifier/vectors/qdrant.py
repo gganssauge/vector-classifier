@@ -152,6 +152,44 @@ class QdrantStorageManager:
                 f"Failed to ensure collection '{self.collection}': {e}"
             ) from e
 
+    async def recreate_collection(self) -> None:
+        """Drop collection if it exists and recreate with schema and payload indexes."""
+        try:
+            if await self.client.collection_exists(self.collection):
+                logger.info("Dropping existing collection '%s'", self.collection)
+                await self.client.delete_collection(self.collection)
+            await self.ensure_collection()
+        except Exception as e:
+            logger.error("Failed to recreate collection '%s': %s", self.collection, e)
+            raise QdrantStorageError(
+                f"Failed to recreate collection '{self.collection}': {e}"
+            ) from e
+
+    async def upsert_documents_batch(
+        self,
+        points: list[models.PointStruct],
+        wait: bool = False,
+    ) -> None:
+        """Upsert a batch of document points into Qdrant.
+
+        Args:
+            points: List of PointStruct instances to upsert.
+            wait: Whether to wait for changes to be committed to disk.
+        """
+        if not points:
+            return
+        try:
+            await self.client.upsert(
+                collection_name=self.collection,
+                points=points,
+                wait=wait,
+            )
+        except Exception as e:
+            logger.error("Failed to batch upsert %d points: %s", len(points), e)
+            raise QdrantStorageError(
+                f"Failed to batch upsert {len(points)} points: {e}"
+            ) from e
+
     async def upsert_document(
         self,
         point_id: str,
@@ -176,11 +214,7 @@ class QdrantStorageManager:
                 },
                 payload=payload,
             )
-            await self.client.upsert(
-                collection_name=self.collection,
-                points=[point],
-                wait=False,
-            )
+            await self.upsert_documents_batch(points=[point], wait=False)
         except Exception as e:
             logger.error("Failed to upsert point '%s': %s", point_id, e)
             raise QdrantStorageError(
