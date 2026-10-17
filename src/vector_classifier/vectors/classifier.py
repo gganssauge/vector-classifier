@@ -253,7 +253,7 @@ class VectorClassifierEngine:
                 vector_name="content",
                 vector=content_vector,
                 limit=5,
-                filter_criteria={"is_tax_relevant": True},
+                filter_criteria={"is_tax_curated": True},
             )
             if not tax_neighbors:
                 return 0.0, None

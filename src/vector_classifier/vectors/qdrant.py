@@ -16,6 +16,7 @@ PAYLOAD_INDEXES: list[tuple[str, models.PayloadSchemaType]] = [
     ("paperless_id", models.PayloadSchemaType.INTEGER),
     ("doc_type", models.PayloadSchemaType.KEYWORD),
     ("is_tax_relevant", models.PayloadSchemaType.BOOL),
+    ("is_tax_curated", models.PayloadSchemaType.BOOL),
     ("tax_category", models.PayloadSchemaType.KEYWORD),
 ]
 

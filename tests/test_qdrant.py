@@ -127,6 +127,7 @@ async def test_ensure_collection_creates_when_not_exists():
         "paperless_id",
         "doc_type",
         "is_tax_relevant",
+        "is_tax_curated",
         "tax_category",
     ]
 
