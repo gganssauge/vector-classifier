@@ -47,6 +47,18 @@ def extract_header_content(content: str, max_chars: int = 3000) -> str:
     return content[:max_chars].strip()
 
 
+def extract_body_content(content: str, max_chars: int = 8000) -> str:
+    """Extract content body safely bounded by context window (up to ~8000 characters)."""
+    if not content:
+        return ""
+    if len(content) <= max_chars:
+        return content
+    cut_idx = content.rfind("\n", 0, max_chars)
+    if cut_idx > 2000:
+        return content[:cut_idx].strip()
+    return content[:max_chars].strip()
+
+
 def _anchor_to_embedding_text(anchor: SemanticAnchor) -> str:
     """Format anchor metadata into text for dense embedding."""
     text = f"{anchor.name}: {anchor.description}"

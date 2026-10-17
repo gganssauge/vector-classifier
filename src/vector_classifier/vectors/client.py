@@ -160,6 +160,8 @@ class OllamaEmbeddingClient:
         the configured fallback token is embedded instead.
         """
         cleaned = sanitize_text(text)
+        if len(cleaned) > 8000:
+            cleaned = cleaned[:8000].strip()
         prompt = cleaned if cleaned else self.fallback_text
 
         payload = {
@@ -167,7 +169,14 @@ class OllamaEmbeddingClient:
             "prompt": prompt,
         }
 
-        data = await self._post_with_retry("/api/embeddings", payload)
+        try:
+            data = await self._post_with_retry("/api/embeddings", payload)
+        except OllamaResponseError as err:
+            if "exceeds the context length" in str(err) and len(prompt) > 1000:
+                payload["prompt"] = prompt[: len(prompt) // 2].strip()
+                data = await self._post_with_retry("/api/embeddings", payload)
+            else:
+                raise
 
         if "embedding" not in data:
             raise OllamaResponseError(
