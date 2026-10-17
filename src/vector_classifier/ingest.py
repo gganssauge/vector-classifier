@@ -131,43 +131,106 @@ class PaperlessIngestRunner:
         if not doc.content or not doc.content.strip():
             return None
 
-        async with semaphore:
-            result = await self.engine.classify(
-                content=doc.content,
-                filename=doc.filename,
-                sha256=doc.content_sha256,
-            )
+        try:
+            async with semaphore:
+                result = await self.engine.classify(
+                    content=doc.content,
+                    filename=doc.filename,
+                    sha256=doc.content_sha256,
+                )
 
-        header_vec = result.header_vector
-        content_vec = result.content_vector
-        if header_vec is None or content_vec is None:
+            header_vec = result.header_vector
+            content_vec = result.content_vector
+            if header_vec is None or content_vec is None:
+                return None
+
+            point_id = generate_point_id(doc.content_sha256)
+            payload = {
+                "sha256": doc.content_sha256,
+                "filename": doc.filename,
+                "paperless_id": doc.paperless_id,
+                "source_system": "paperless",
+                "title": doc.filename,
+                "doc_type_original": doc.current_doc_type,
+                "tags_original": doc.current_tags,
+                "predicted_doc_type": result.predicted_doc_type or "",
+                "predicted_tags": result.predicted_tags,
+                "is_tax_relevant": bool(result.is_tax_relevant),
+                "tax_category": result.tax_category,
+                "tax_confidence": round(float(result.tax_confidence), 4),
+                "indexed_at": datetime.now(timezone.utc).isoformat(),
+            }
+
+            return models.PointStruct(
+                id=point_id,
+                vector={
+                    "header": header_vec,
+                    "content": content_vec,
+                },
+                payload=payload,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Error vectorizing doc %s (%s): %s", doc.paperless_id, doc.filename, exc
+            )
             return None
 
-        point_id = generate_point_id(doc.content_sha256)
-        payload = {
-            "sha256": doc.content_sha256,
-            "filename": doc.filename,
-            "paperless_id": doc.paperless_id,
-            "source_system": "paperless",
-            "title": doc.filename,
-            "doc_type_original": doc.current_doc_type,
-            "tags_original": doc.current_tags,
-            "predicted_doc_type": result.predicted_doc_type or "",
-            "predicted_tags": result.predicted_tags,
-            "is_tax_relevant": bool(result.is_tax_relevant),
-            "tax_category": result.tax_category,
-            "tax_confidence": round(float(result.tax_confidence), 4),
-            "indexed_at": datetime.now(timezone.utc).isoformat(),
-        }
+    async def _get_existing_point_ids(self) -> set[str]:
+        """Fetch all existing point IDs from Qdrant collection for resumability."""
+        existing_point_ids: set[str] = set()
+        if self.recreate:
+            return existing_point_ids
+        try:
+            next_page_offset = None
+            while True:
+                records, next_page_offset = await self.qdrant_manager.client.scroll(
+                    collection_name=self.qdrant_manager.collection,
+                    limit=1000,
+                    with_payload=False,
+                    with_vectors=False,
+                    offset=next_page_offset,
+                )
+                for r in records:
+                    existing_point_ids.add(str(r.id))
+                if next_page_offset is None:
+                    break
+        except Exception as e:
+            logger.warning("Could not pre-fetch existing points: %s", e)
+        return existing_point_ids
 
-        return models.PointStruct(
-            id=point_id,
-            vector={
-                "header": header_vec,
-                "content": content_vec,
-            },
-            payload=payload,
-        )
+    async def _process_chunk(
+        self,
+        chunk: list[AuditDocument],
+        semaphore: asyncio.Semaphore,
+        existing_point_ids: set[str],
+    ) -> tuple[int, int, int]:
+        """Vectorize and upsert a chunk of documents, returning (indexed, skipped, tax_count)."""
+        docs_to_embed = [
+            d
+            for d in chunk
+            if generate_point_id(d.content_sha256) not in existing_point_ids
+        ]
+        if not docs_to_embed:
+            return 0, 0, 0
+
+        vectorize_tasks = [
+            self._process_and_create_point(d, semaphore) for d in docs_to_embed
+        ]
+        points = await asyncio.gather(*vectorize_tasks)
+        valid_points = [p for p in points if p is not None]
+        skipped = len(docs_to_embed) - len(valid_points)
+
+        if valid_points:
+            await self.qdrant_manager.upsert_documents_batch(valid_points, wait=False)
+            for p in valid_points:
+                existing_point_ids.add(str(p.id))
+            tax_count = sum(
+                1
+                for p in valid_points
+                if p.payload and p.payload.get("is_tax_relevant")
+            )
+            return len(valid_points), skipped, tax_count
+        return 0, skipped, 0
 
     async def run(
         self,
@@ -223,6 +286,12 @@ class PaperlessIngestRunner:
             skipped_empty = 0
             tax_relevant_count = 0
 
+            existing_point_ids = await self._get_existing_point_ids()
+            if existing_point_ids:
+                c.print(
+                    f"[cyan]Found {len(existing_point_ids)} already indexed points in Qdrant (will skip).[/cyan]"
+                )
+
             with Progress(
                 SpinnerColumn(),
                 TextColumn("[bold blue]{task.description}"),
@@ -250,38 +319,20 @@ class PaperlessIngestRunner:
                     if not results:
                         break
 
-                    # Normalize page documents
-                    page_docs: list[AuditDocument] = []
-                    for raw in results:
-                        resolved = self._resolve_document_dict(raw)
-                        doc = AuditDocument.from_raw(resolved)
-                        page_docs.append(doc)
-
+                    page_docs = [
+                        AuditDocument.from_raw(self._resolve_document_dict(raw))
+                        for raw in results
+                    ]
                     scanned_count += len(page_docs)
 
-                    # Vectorize page docs in parallel chunks matching batch_size
                     for i in range(0, len(page_docs), self.batch_size):
                         chunk = page_docs[i : i + self.batch_size]
-                        vectorize_tasks = [
-                            self._process_and_create_point(d, semaphore) for d in chunk
-                        ]
-                        points = await asyncio.gather(*vectorize_tasks)
-
-                        valid_points = [p for p in points if p is not None]
-                        empty_in_chunk = len(chunk) - len(valid_points)
-                        skipped_empty += empty_in_chunk
-
-                        if valid_points:
-                            await self.qdrant_manager.upsert_documents_batch(
-                                valid_points, wait=False
-                            )
-                            indexed_count += len(valid_points)
-                            tax_relevant_count += sum(
-                                1
-                                for p in valid_points
-                                if p.payload and p.payload.get("is_tax_relevant")
-                            )
-
+                        idx_cnt, skp_cnt, tx_cnt = await self._process_chunk(
+                            chunk, semaphore, existing_point_ids
+                        )
+                        indexed_count += idx_cnt
+                        skipped_empty += skp_cnt
+                        tax_relevant_count += tx_cnt
                         progress.update(task, advance=len(chunk))
 
                     if not data.get("next"):
