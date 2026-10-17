@@ -213,14 +213,14 @@ def _make_unit_vector(similarity: float, dim: int = 8) -> list[float]:
 @pytest.mark.parametrize(
     ("score", "expected_relevant", "expected_review", "expect_category"),
     [
-        (0.6900, False, False, False),
-        (0.6999, False, False, False),
-        (0.7000, True, True, True),
-        (0.7001, True, True, True),
-        (0.8100, True, True, True),
-        (0.8199, True, True, True),
-        (0.8200, True, False, True),
-        (0.8201, True, False, True),
+        (0.5100, False, False, False),
+        (0.5199, False, False, False),
+        (0.5200, True, True, True),
+        (0.5201, True, True, True),
+        (0.5900, True, True, True),
+        (0.5999, True, True, True),
+        (0.6000, True, False, True),
+        (0.6001, True, False, True),
     ],
 )
 @pytest.mark.asyncio
@@ -230,7 +230,7 @@ async def test_tax_three_zone_precise_boundaries(
     expected_review: bool,
     expect_category: bool,
 ):
-    """Test tax classification at exact sub-cent boundary thresholds (0.6999, 0.7000, 0.8199, 0.8200)."""
+    """Test tax classification at exact sub-cent boundary thresholds (0.5199, 0.5200, 0.5999, 0.6000)."""
     ref_vec = [1.0] + [0.0] * 7
     anchor_dict = {
         "steuer:werbungskosten": ref_vec,
@@ -262,10 +262,10 @@ async def test_tax_three_zone_precise_boundaries(
 @pytest.mark.parametrize(
     ("knn_score", "expected_relevant", "expected_review", "expect_category"),
     [
-        (0.6999, False, False, False),
-        (0.7000, True, True, True),
-        (0.8199, True, True, True),
-        (0.8200, True, False, True),
+        (0.5199, False, False, False),
+        (0.5200, True, True, True),
+        (0.5999, True, True, True),
+        (0.6000, True, False, True),
     ],
 )
 @pytest.mark.asyncio
@@ -413,7 +413,9 @@ async def test_qdrant_client_property_and_setter():
         client = manager.client
         assert client is mock_cls.return_value
         assert manager._client is client
-        mock_cls.assert_called_once_with(host="localhost", port=6333, api_key=None)
+        mock_cls.assert_called_once_with(
+            host="localhost", port=6333, api_key=None, timeout=60
+        )
 
     # Setter overrides client
     new_mock = AsyncMock()

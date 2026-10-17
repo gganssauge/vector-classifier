@@ -33,10 +33,10 @@ cli_runner = CliRunner()
 def test_determine_tax_action():
     """Verify three-zone threshold action mapping."""
     assert determine_tax_action(0.95) == "auto-tag"
-    assert determine_tax_action(0.82) == "auto-tag"
-    assert determine_tax_action(0.819) == "review"
-    assert determine_tax_action(0.70) == "review"
-    assert determine_tax_action(0.699) == "none"
+    assert determine_tax_action(0.60) == "auto-tag"
+    assert determine_tax_action(0.599) == "review"
+    assert determine_tax_action(0.52) == "review"
+    assert determine_tax_action(0.519) == "none"
     assert determine_tax_action(0.10) == "none"
 
 
@@ -190,7 +190,7 @@ async def test_audit_runner_execution_and_csv(
             predicted_tags=["IT", "Fachliteratur"],
             tag_scores={"IT": 0.90, "Fachliteratur": 0.84},
             is_tax_relevant=True,
-            tax_confidence=0.78,
+            tax_confidence=0.55,
             tax_category="werbungskosten",
             tax_review_required=True,
             header_vector=[0.1] * 1024,
@@ -217,9 +217,9 @@ async def test_audit_runner_execution_and_csv(
     assert (
         summary.newly_discovered_tax_docs == 1
     )  # doc 103 was not currently tax tagged
-    assert summary.confident_count == 1  # doc 101 has 0.85 >= 0.82 -> auto-tag
-    assert summary.review_count == 1  # doc 103 has 0.78 (0.70..0.82) -> review
-    assert summary.none_count == 1  # doc 102 has 0.45 < 0.70 -> none
+    assert summary.confident_count == 1  # doc 101 has 0.85 >= 0.60 -> auto-tag
+    assert summary.review_count == 1  # doc 103 has 0.55 (0.52..0.60) -> review
+    assert summary.none_count == 1  # doc 102 has 0.45 < 0.52 -> none
 
     # Verify CSV file output
     assert output_csv.exists()

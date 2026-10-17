@@ -83,6 +83,7 @@ class QdrantStorageManager:
         port: int | None = None,
         collection: str | None = None,
         api_key: str | None = None,
+        timeout: float | None = None,
         client: AsyncQdrantClient | None = None,
     ) -> None:
         """Initialize QdrantStorageManager with configuration or defaults."""
@@ -92,6 +93,7 @@ class QdrantStorageManager:
             collection if collection is not None else settings.qdrant_collection
         )
         self.api_key = api_key if api_key is not None else settings.qdrant_api_key
+        self.timeout = timeout if timeout is not None else settings.qdrant_timeout
         self._external_client = client is not None
         self._client = client
 
@@ -103,6 +105,7 @@ class QdrantStorageManager:
                 host=self.host,
                 port=self.port,
                 api_key=self.api_key if self.api_key else None,
+                timeout=int(self.timeout) if self.timeout is not None else None,
             )
         return self._client
 
@@ -176,6 +179,7 @@ class QdrantStorageManager:
             await self.client.upsert(
                 collection_name=self.collection,
                 points=[point],
+                wait=False,
             )
         except Exception as e:
             logger.error("Failed to upsert point '%s': %s", point_id, e)

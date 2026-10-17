@@ -1,0 +1,54 @@
+name: Auto-merge Docs PR
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled]
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: automerge-docs-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  automerge-docs:
+    name: Auto-merge Documentation PR
+    if: contains(github.event.pull_request.labels.*.name, 'automerge')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Check for code-relevant changes
+        uses: dorny/paths-filter@v4
+        id: filter
+        with:
+          filters: |
+            code:
+              - 'src/**'
+              - 'tests/**'
+              - 'scripts/**'
+              - 'pyproject.toml'
+              - 'uv.lock'
+              - 'Dockerfile'
+              - '.dockerignore'
+              - '.github/workflows/**'
+
+      - name: Squash and merge docs PR
+        if: steps.filter.outputs.code == 'false'
+        run: |
+          echo "No code-relevant changes detected (pure documentation PR with 'automerge' label)."
+          echo "Merging PR #${PR_NUMBER}..."
+          gh pr merge "${PR_NUMBER}" --repo "${GITHUB_REPOSITORY}" --squash --delete-branch
+        env:
+          GH_TOKEN: ${{ secrets.AUTOMERGE_TOKEN || secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}

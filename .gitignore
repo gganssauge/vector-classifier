@@ -62,6 +62,7 @@ cover/
 .env*
 !.env.example
 test_output/
+*.csv
 
 # IDE & Editor settings
 .idea/

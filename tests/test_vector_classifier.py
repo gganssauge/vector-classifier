@@ -125,14 +125,14 @@ async def test_doctype_classification_confident():
 
 @pytest.mark.asyncio
 async def test_doctype_classification_low_confidence():
-    """Low similarity (< 0.80) results in predicted_doc_type=None."""
+    """Low similarity (< 0.50) results in predicted_doc_type=None."""
     anchor_dict: dict[str, list[float]] = {}
     for anchor in get_document_type_anchors():
         anchor_dict[anchor.name] = make_ref_vector(8)
 
     mock_ollama = AsyncMock(spec=OllamaEmbeddingClient)
-    # Header vector has only 0.65 similarity
-    query_header = make_unit_vector_with_similarity(0.65, dim=8)
+    # Header vector has only 0.35 similarity (< 0.50)
+    query_header = make_unit_vector_with_similarity(0.35, dim=8)
     content_vec = [0.0] * 8
     mock_ollama.get_document_embeddings.return_value = (query_header, content_vec)
 
@@ -144,7 +144,7 @@ async def test_doctype_classification_low_confidence():
     result = await engine.classify(content="Dummy Inhalt")
 
     assert result.predicted_doc_type is None
-    assert result.doc_type_confidence == 0.65
+    assert result.doc_type_confidence == 0.35
 
 
 @pytest.mark.asyncio
@@ -187,10 +187,10 @@ async def test_doctype_classification_ambiguous_margin():
 @pytest.mark.parametrize(
     ("score", "expected_relevant", "expected_review", "expect_category"),
     [
-        (0.69, False, False, False),
-        (0.70, True, True, True),
-        (0.81, True, True, True),
-        (0.82, True, False, True),
+        (0.51, False, False, False),
+        (0.52, True, True, True),
+        (0.59, True, True, True),
+        (0.60, True, False, True),
     ],
 )
 @pytest.mark.asyncio
@@ -200,7 +200,7 @@ async def test_tax_three_zone_boundaries(
     expected_review: bool,
     expect_category: bool,
 ):
-    """Test three-zone tax relevance boundary conditions (0.69, 0.70, 0.81, 0.82)."""
+    """Test three-zone tax relevance boundary conditions (0.51, 0.52, 0.59, 0.60)."""
     ref_vec = make_ref_vector(8)
     anchor_dict: dict[str, list[float]] = {}
     for a in get_tax_anchors():
@@ -237,19 +237,19 @@ async def test_tax_three_zone_boundaries(
 # ---------------------------------------------------------------------------
 @pytest.mark.asyncio
 async def test_thematic_tag_multilabel_thresholding():
-    """Tags with similarity >= 0.78 are assigned; tags below are excluded."""
+    """Tags with similarity >= 0.50 are assigned; tags below are excluded."""
     ref_vec = make_ref_vector(8)
     anchor_dict: dict[str, list[float]] = {}
     for a in get_thematic_tag_anchors():
         if a.name == "Energie":
-            # Similarity = 0.85 (qualifies)
+            # Similarity = 0.85 (qualifies >= 0.50)
             anchor_dict[a.name] = make_unit_vector_with_similarity(0.85, dim=8)
         elif a.name == "Fahrzeug":
-            # Similarity = 0.79 (qualifies)
-            anchor_dict[a.name] = make_unit_vector_with_similarity(0.79, dim=8)
+            # Similarity = 0.55 (qualifies >= 0.50)
+            anchor_dict[a.name] = make_unit_vector_with_similarity(0.55, dim=8)
         elif a.name == "Telekommunikation":
-            # Similarity = 0.75 (excluded)
-            anchor_dict[a.name] = make_unit_vector_with_similarity(0.75, dim=8)
+            # Similarity = 0.45 (excluded < 0.50)
+            anchor_dict[a.name] = make_unit_vector_with_similarity(0.45, dim=8)
         else:
             anchor_dict[a.name] = [0.0] * 8
 
@@ -271,8 +271,8 @@ async def test_thematic_tag_multilabel_thresholding():
     assert "Telekommunikation" not in result.predicted_tags
     assert result.predicted_tags == ["Energie", "Fahrzeug"]
     assert result.tag_scores["Energie"] == 0.85
-    assert result.tag_scores["Fahrzeug"] == 0.79
-    assert result.tag_scores["Telekommunikation"] == 0.75
+    assert result.tag_scores["Fahrzeug"] == 0.55
+    assert result.tag_scores["Telekommunikation"] == 0.45
 
 
 # ---------------------------------------------------------------------------

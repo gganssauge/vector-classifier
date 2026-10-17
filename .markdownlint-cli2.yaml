@@ -2,4 +2,5 @@ config:
   MD013: false  # Line length
   MD024: false  # Multiple headers with same content
   MD033: false  # Inline HTML
+  MD041: false  # First line heading (for PR templates)
   MD042: false  # No empty links

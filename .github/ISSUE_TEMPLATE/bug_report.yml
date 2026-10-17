@@ -1,0 +1,51 @@
+name: "Bug Report"
+description: "File a bug report to help us improve vector-classifier"
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to fill out this bug report!
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: "What happened?"
+      description: "A clear and concise description of what the bug is."
+      placeholder: "Tell us what you see!"
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: "Steps to Reproduce"
+      description: "Steps to reproduce the behavior."
+      placeholder: |
+        1. Start vector-classifier via `...`
+        2. Send request `POST /api/v1/classify` with payload `...`
+        3. See error
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: "Expected Behavior"
+      description: "A clear and concise description of what you expected to happen."
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: "Relevant Logs or Output"
+      description: "Please copy and paste any relevant logs or traceback."
+      render: shell
+  - type: dropdown
+    id: version
+    attributes:
+      label: "Deployment Environment"
+      options:
+        - "Docker container (ghcr.io/gganssauge/vector-classifier)"
+        - "Kubernetes (homelab)"
+        - "Local development (uv run)"
+    validations:
+      required: true

@@ -44,6 +44,10 @@ class Settings(BaseSettings):
         default="",
         validation_alias="QDRANT_API_KEY",
     )
+    qdrant_timeout: float = Field(
+        default=60.0,
+        validation_alias="QDRANT_TIMEOUT",
+    )
 
     # Server settings
     host: str = Field(default="0.0.0.0", validation_alias="HOST")
@@ -51,21 +55,21 @@ class Settings(BaseSettings):
     log_level: str = Field(default="INFO", validation_alias="LOG_LEVEL")
     debug: bool = Field(default=False, validation_alias="DEBUG")
 
-    # Classification Thresholds
+    # Classification Thresholds (calibrated for bge-m3 dense embeddings)
     threshold_tax_confident: float = Field(
-        default=0.82,
+        default=0.60,
         validation_alias="THRESHOLD_TAX_CONFIDENT",
     )
     threshold_tax_review: float = Field(
-        default=0.70,
+        default=0.52,
         validation_alias="THRESHOLD_TAX_REVIEW",
     )
     threshold_tag: float = Field(
-        default=0.78,
+        default=0.50,
         validation_alias="THRESHOLD_TAG",
     )
     threshold_doctype_confident: float = Field(
-        default=0.80,
+        default=0.50,
         validation_alias="THRESHOLD_DOCTYPE_CONFIDENT",
     )
 

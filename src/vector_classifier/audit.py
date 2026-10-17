@@ -446,10 +446,17 @@ class AuditRunner:
             "Newly discovered tax documents", str(summary.newly_discovered_tax_docs)
         )
         table.add_row(
-            "Tax Zone: Confident (auto-tag, ≥ 0.82)", str(summary.confident_count)
+            f"Tax Zone: Confident (auto-tag, ≥ {settings.threshold_tax_confident:.2f})",
+            str(summary.confident_count),
         )
-        table.add_row("Tax Zone: Review (0.70 - 0.81)", str(summary.review_count))
-        table.add_row("Tax Zone: None (< 0.70)", str(summary.none_count))
+        table.add_row(
+            f"Tax Zone: Review ({settings.threshold_tax_review:.2f} - {settings.threshold_tax_confident:.2f})",
+            str(summary.review_count),
+        )
+        table.add_row(
+            f"Tax Zone: None (< {settings.threshold_tax_review:.2f})",
+            str(summary.none_count),
+        )
 
         c.print(table)
 

@@ -3,7 +3,7 @@
 > Standalone Microservice & Batch Indexer for Semantic Vector Classification, Tax Relevance Assessment, and Similarity Search powered by **Ollama (`bge-m3`)** and **Qdrant**.
 
 [![CI Status](https://img.shields.io/badge/CI-passing-brightgreen)](#)
-[![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue.svg)](https://www.python.org/downloads/)
+[![Python 3.15+](https://img.shields.io/badge/python-3.15%2B-blue.svg)](https://www.python.org/downloads/)
 [![Code Style: Ruff](https://img.shields.io/badge/code%20style-ruff-000000.svg)](https://github.com/astral-sh/ruff)
 [![Architecture: Decoupled](https://img.shields.io/badge/architecture-decoupled-success)](#)
 

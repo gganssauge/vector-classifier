@@ -1,12 +1,5 @@
 """Vector operations, anchors, and classification engine module."""
 
-from vector_classifier.audit import (
-    AUDIT_CSV_COLUMNS,
-    AuditRecord,
-    AuditRunner,
-    AuditSummary,
-    run_audit,
-)
 from vector_classifier.models.schemas import VectorClassificationResult
 from vector_classifier.vectors.anchors import (
     get_document_type_anchors,
@@ -32,10 +25,6 @@ from vector_classifier.vectors.qdrant import (
 )
 
 __all__ = [
-    "AUDIT_CSV_COLUMNS",
-    "AuditRecord",
-    "AuditRunner",
-    "AuditSummary",
     "OllamaClientError",
     "OllamaConnectionError",
     "OllamaEmbeddingClient",
@@ -51,5 +40,4 @@ __all__ = [
     "get_document_type_anchors",
     "get_tax_anchors",
     "get_thematic_tag_anchors",
-    "run_audit",
 ]

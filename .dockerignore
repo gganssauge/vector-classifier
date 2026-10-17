@@ -1,0 +1,41 @@
+# Git & GitHub
+.git/
+.github/
+.gitignore
+
+# Virtual environments & dependencies
+.venv/
+venv/
+ENV/
+env/
+
+# Caches & temporary files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+*.cover
+*.py,cover
+.scratch/
+
+# Tests & Evaluation artifacts
+tests/
+test_output/
+*.csv
+
+# Environment files
+.env*
+!.env.example
+
+# Documentation & IDE
+docs/
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
