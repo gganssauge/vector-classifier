@@ -154,6 +154,8 @@ class TaxReviewManager:
         self,
         row: dict[str, Any],
         review_tag_id: int,
+        privat_tag_id: int | None,
+        vermietung_tag_id: int | None,
         client: httpx.AsyncClient,
         semaphore: asyncio.Semaphore,
         dry_run: bool,
@@ -163,6 +165,8 @@ class TaxReviewManager:
         if not raw_pid:
             return "skip"
         pid = int(raw_pid)
+        pred_cat = str(row.get("predicted_tax_category", "")).lower()
+        target_tag_id = vermietung_tag_id if "anlage-v" in pred_cat else privat_tag_id
 
         async with semaphore:
             try:
@@ -181,6 +185,8 @@ class TaxReviewManager:
 
                 if review_tag_id not in new_tags:
                     new_tags.append(review_tag_id)
+                if target_tag_id and target_tag_id not in new_tags:
+                    new_tags.append(target_tag_id)
 
                 if set(new_tags) == set(current_tags):
                     return "already_tagged"
@@ -203,7 +209,7 @@ class TaxReviewManager:
         dry_run: bool = False,
         console: Console | None = None,
     ) -> dict[str, int]:
-        """Tag all candidate documents in Paperless with Steuern-Review."""
+        """Tag all candidate documents in Paperless with Steuern-Review and proposed category tag."""
         out = console or Console()
         stats = {"candidates": 0, "updated": 0, "already_tagged": 0, "errors": 0}
 
@@ -219,12 +225,18 @@ class TaxReviewManager:
             review_tag_id = await self.get_or_create_tag(
                 client, "Steuern-Review", color="#f59e0b"
             )
+            tag_map = await self.get_tax_tag_ids(client)
+            privat_tag_id = tag_map.get("Steuern-Privat")
+            vermietung_tag_id = tag_map.get("Steuern-Vermietung")
+
             semaphore = asyncio.Semaphore(4)
 
             tasks = [
                 self._tag_single_candidate(
                     row=r,
                     review_tag_id=review_tag_id,
+                    privat_tag_id=privat_tag_id,
+                    vermietung_tag_id=vermietung_tag_id,
                     client=client,
                     semaphore=semaphore,
                     dry_run=dry_run,

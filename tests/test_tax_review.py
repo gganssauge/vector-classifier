@@ -138,7 +138,7 @@ async def test_tag_candidates_apply(tmp_path: Path):
             return_value=Response(200, json={"id": 102, "tags": []})
         )
         patch_route = respx_mock.patch("/api/documents/102/").mock(
-            return_value=Response(200, json={"id": 102, "tags": [270]})
+            return_value=Response(200, json={"id": 102, "tags": [270, 248]})
         )
 
         stats = await mgr.tag_candidates(csv_path=csv_file, dry_run=False)
