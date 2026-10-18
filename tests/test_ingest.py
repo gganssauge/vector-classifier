@@ -1,5 +1,6 @@
 """Unit tests for Paperless document ingestion pipeline."""
 
+import re
 from unittest.mock import AsyncMock
 
 import pytest
@@ -140,7 +141,8 @@ def test_cli_ingest_help():
     runner = CliRunner()
     result = runner.invoke(app, ["ingest", "--help"])
     assert result.exit_code == 0
-    assert "Ingest documents from Paperless-ngx" in result.stdout
-    assert "--recreate" in result.stdout
-    assert "--concurrency" in result.stdout
-    assert "--batch-size" in result.stdout
+    clean_stdout = re.sub(r"\x1b\[[0-9;]*[a-zA-Z]", "", result.stdout)
+    assert "Ingest documents from Paperless-ngx" in clean_stdout
+    assert "--recreate" in clean_stdout
+    assert "--concurrency" in clean_stdout
+    assert "--batch-size" in clean_stdout
