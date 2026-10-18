@@ -602,6 +602,20 @@ def test_is_tax_disqualified():
         is True
     )
 
+    # Variant with singular 'Information', 'Geschäftsvorganges' and linebreaks
+    variant_text = (
+        "Information zur steuerlichen Behandlung dieses Geschäftsvorganges und den auf\n"
+        "Ihrem Konto gebuchten Endbetrag finden Sie auf der separaten Steuermitteilung\n"
+        "(Referenz-Nr. 5280MPBKDNZ000B7)."
+    )
+    assert (
+        is_tax_disqualified(variant_text, filename="Dividendengutschrift.pdf") is True
+    )
+
+    # Line break inside the pattern itself
+    linebreak_text = "Details finden Sie auf der separaten\nSteuermitteilung."
+    assert is_tax_disqualified(linebreak_text, filename="Abrechnung.pdf") is True
+
     # Document whose title indicates it IS the Steuermitteilung -> NOT disqualified
     assert (
         is_tax_disqualified(

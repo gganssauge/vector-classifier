@@ -102,17 +102,26 @@ def _extract_neighbor_canonical_tags(neighbor: Any) -> set[str]:
 TAX_DISQUALIFYING_PATTERNS = (
     "separaten steuermitteilung",
     "separate steuermitteilung",
+    "separater steuermitteilung",
     "auf der separaten steuermitteilung",
+    "separaten steuerbescheinigung",
+    "separate steuerbescheinigung",
+    "separater steuerbescheinigung",
+    "auf der separaten steuerbescheinigung",
+    "information zur steuerlichen behandlung",
+    "informationen zur steuerlichen behandlung",
+    "finden sie auf der separaten",
 )
 
 
 def is_tax_disqualified(content: str, filename: str = "") -> bool:
     """Check if document explicitly defers tax data to a separate document."""
-    text_lower = content.lower()
     fn_lower = filename.lower()
     if "steuermitteilung" in fn_lower or "steuerbescheinigung" in fn_lower:
         return False
-    return any(p in text_lower for p in TAX_DISQUALIFYING_PATTERNS)
+    # Normalize whitespace to reliably match patterns across line breaks or extra spaces
+    text_norm = " ".join(content.lower().split())
+    return any(p in text_norm for p in TAX_DISQUALIFYING_PATTERNS)
 
 
 _DEFAULT: Any = object()
