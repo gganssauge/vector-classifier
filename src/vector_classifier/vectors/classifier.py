@@ -237,8 +237,12 @@ class VectorClassifierEngine:
             best_category = knn_category
 
         # Contrastive evaluation against non-tax neighbor:
-        # If the non-tax neighbor clearly beats the tax score (margin >= 0.03):
-        if knn_nontax_score >= tax_confidence + 0.03:
+        # Contrastive evaluation against non-tax neighbor:
+        # If the non-tax neighbor clearly beats the tax score (margin >= 0.03) or below review threshold:
+        if (
+            knn_nontax_score >= tax_confidence + 0.03
+            or tax_confidence < settings.threshold_tax_review
+        ):
             is_tax_relevant = False
             tax_review_required = False
             tax_category = None
@@ -249,14 +253,10 @@ class VectorClassifierEngine:
             is_tax_relevant = True
             tax_review_required = False
             tax_category = best_category
-        elif tax_confidence >= settings.threshold_tax_review:
+        else:
             is_tax_relevant = True
             tax_review_required = True
             tax_category = best_category
-        else:
-            is_tax_relevant = False
-            tax_review_required = False
-            tax_category = None
 
         matched_anchors = [
             {
@@ -274,24 +274,6 @@ class VectorClassifierEngine:
             tax_review_required,
             matched_anchors,
         )
-
-    async def _query_nontax_knn(self, content_vector: list[float]) -> float:
-        """Query Qdrant for top non-tax neighbor score."""
-        if self.qdrant_manager is None:
-            return 0.0
-        try:
-            nontax_neighbors = await self.qdrant_manager.search_by_vector(
-                vector_name="content",
-                vector=content_vector,
-                limit=1,
-                filter_criteria={"is_tax_relevant": False},
-            )
-            if not nontax_neighbors:
-                return 0.0
-            return max(0.0, float(getattr(nontax_neighbors[0], "score", 0.0)))
-        except Exception as exc:
-            logger.warning("k-NN non-tax vector search failed: %s", exc)
-        return 0.0
 
     async def _query_nontax_knn(self, content_vector: list[float]) -> float:
         """Query Qdrant for top non-tax neighbor score."""

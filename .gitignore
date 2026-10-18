@@ -46,6 +46,7 @@ coverage.xml
 .hypothesis/
 .pytest_cache/
 cover/
+.scannerwork/
 
 # Type checking & Linters
 .ruff_cache/

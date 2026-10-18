@@ -140,7 +140,7 @@ class OllamaEmbeddingClient:
             except (httpx.TransportError, httpx.TimeoutException) as exc:
                 last_exception = exc
                 if attempt < self.max_retries - 1:
-                    await asyncio.sleep(self.retry_delay * (2**attempt))
+                    await asyncio.sleep(self.retry_delay * 2**attempt)
                     continue
                 raise OllamaConnectionError(
                     f"Failed to connect to Ollama at {self.base_url} after {self.max_retries} attempts: {exc}"
@@ -174,10 +174,8 @@ class OllamaEmbeddingClient:
                 data = await self._post_with_retry("/api/embeddings", payload)
                 break
             except OllamaResponseError as err:
-                if (
-                    "exceeds the context length" in str(err)
-                    and len(payload["prompt"]) > 500
-                ):
+                is_context_err = "exceeds the context length" in str(err)
+                if is_context_err and len(payload["prompt"]) > 500:
                     payload["prompt"] = payload["prompt"][
                         : len(payload["prompt"]) // 2
                     ].strip()
