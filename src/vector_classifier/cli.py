@@ -186,5 +186,151 @@ def ingest(
     asyncio.run(_execute())
 
 
+@app.command()
+def calibrate_tax(
+    privat_file: str = typer.Option(
+        "/home/gotti/paperless-custom-classifier/steuern-privat.txt",
+        "--privat-file",
+        help="Path to curated steuern-privat.txt",
+    ),
+    vermietung_file: str = typer.Option(
+        "/home/gotti/paperless-custom-classifier/steuern-vermietung.txt",
+        "--vermietung-file",
+        help="Path to curated steuern-vermietung.txt",
+    ),
+    candidates_csv: str = typer.Option(
+        "tax_candidates_2026.csv",
+        "--candidates-csv",
+        help="Output CSV path for extracted candidates",
+    ),
+    threshold_knn: float = typer.Option(
+        0.82,
+        "--threshold-knn",
+        help="Minimum cosine similarity against curated tax anchors",
+    ),
+) -> None:
+    """Calibrate Qdrant tax relevance across 3 temporal zones and export 2026+ candidates."""
+    import asyncio
+    from pathlib import Path
+
+    from vector_classifier.calibrate import TaxCalibrationRunner
+
+    runner = TaxCalibrationRunner(
+        privat_file=Path(privat_file),
+        vermietung_file=Path(vermietung_file),
+        candidates_csv=Path(candidates_csv),
+        threshold_knn=threshold_knn,
+    )
+
+    async def _execute() -> None:
+        try:
+            stats = await runner.run(console=console)
+            console.print("\n[bold cyan]Summary of 3-Zone Calibration:[/bold cyan]")
+            console.print(
+                f"  Zone 2020-2025 (Curated): {stats['curated_2020_2025']} tax / {stats['nontax_2020_2025']} non-tax"
+            )
+            console.print(
+                f"  Zone < 2020 (Historical): {stats['historical_pre_2020_tax']} tax / {stats['historical_pre_2020_nontax']} non-tax"
+            )
+            console.print(
+                f"  Zone 2026+ (Candidates):  {stats['post_2025_tax_candidates']} candidates / {stats['post_2025_total']} total"
+            )
+        finally:
+            await runner.close()
+
+    asyncio.run(_execute())
+
+
+@app.command()
+def tag_candidates(
+    candidates_csv: str = typer.Option(
+        "tax_candidates_2026.csv",
+        "--csv",
+        help="Path to tax candidates CSV file",
+    ),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run/--no-dry-run",
+        help="Dry run without modifying Paperless tags",
+    ),
+) -> None:
+    """Tag candidate documents in Paperless with 'Steuern-Review' and proposed tax category."""
+    import asyncio
+    from pathlib import Path
+
+    from vector_classifier.tax_review import TaxReviewManager
+
+    manager = TaxReviewManager()
+
+    async def _execute() -> None:
+        try:
+            console.print(
+                f"[bold cyan]Tagging candidates in Paperless (dry_run={dry_run})...[/bold cyan]"
+            )
+            stats = await manager.tag_candidates(
+                csv_path=Path(candidates_csv),
+                dry_run=dry_run,
+                console=console,
+            )
+            console.print("\n[bold green]Candidate Tagging Complete:[/bold green]")
+            console.print(f"  Candidates found: {stats['candidates']}")
+            console.print(f"  Updated in Paperless: {stats['updated']}")
+            console.print(f"  Already tagged: {stats['already_tagged']}")
+            console.print(f"  Errors: {stats['errors']}")
+        finally:
+            await manager.close()
+
+    asyncio.run(_execute())
+
+
+@app.command()
+def sync_curated(
+    privat_file: str = typer.Option(
+        "/home/gotti/paperless-custom-classifier/steuern-privat.txt",
+        "--privat-file",
+        help="Path to steuern-privat.txt",
+    ),
+    vermietung_file: str = typer.Option(
+        "/home/gotti/paperless-custom-classifier/steuern-vermietung.txt",
+        "--vermietung-file",
+        help="Path to steuern-vermietung.txt",
+    ),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run/--no-dry-run",
+        help="Dry run without writing updates to Qdrant or text files",
+    ),
+) -> None:
+    """Synchronize manually reviewed candidates from Paperless into Qdrant curated status."""
+    import asyncio
+    from pathlib import Path
+
+    from vector_classifier.tax_review import TaxReviewManager
+
+    manager = TaxReviewManager(
+        privat_file=Path(privat_file),
+        vermietung_file=Path(vermietung_file),
+    )
+
+    async def _execute() -> None:
+        try:
+            console.print(
+                f"[bold cyan]Syncing reviewed candidates from Paperless (dry_run={dry_run})...[/bold cyan]"
+            )
+            stats = await manager.sync_curated(dry_run=dry_run, console=console)
+            console.print(
+                "\n[bold green]Curated Synchronization Complete:[/bold green]"
+            )
+            console.print(f"  Total Candidates Checked: {stats['total_candidates']}")
+            console.print(f"  Confirmed (Curated Tax):  {stats['confirmed']}")
+            console.print(f"  Rejected (Non-Tax):       {stats['rejected']}")
+            console.print(f"  Still Pending Review:     {stats['pending']}")
+            console.print(f"  Errors:                   {stats['errors']}")
+        finally:
+            await manager.close()
+
+    asyncio.run(_execute())
+
+
 if __name__ == "__main__":
     app()

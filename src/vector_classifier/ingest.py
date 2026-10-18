@@ -232,6 +232,70 @@ class PaperlessIngestRunner:
             return len(valid_points), skipped, tax_count
         return 0, skipped, 0
 
+    async def _process_page_chunks(
+        self,
+        page_docs: list[AuditDocument],
+        semaphore: asyncio.Semaphore,
+        existing_point_ids: set[str],
+        progress: Progress,
+        task: Any,
+    ) -> tuple[int, int, int]:
+        """Process page documents in chunks, updating progress."""
+        idx_total, skp_total, tx_total = 0, 0, 0
+        for i in range(0, len(page_docs), self.batch_size):
+            chunk = page_docs[i : i + self.batch_size]
+            idx_cnt, skp_cnt, tx_cnt = await self._process_chunk(
+                chunk, semaphore, existing_point_ids
+            )
+            idx_total += idx_cnt
+            skp_total += skp_cnt
+            tx_total += tx_cnt
+            progress.update(task, advance=len(chunk))
+        return idx_total, skp_total, tx_total
+
+    async def _stream_and_ingest(
+        self,
+        http_client: httpx.AsyncClient,
+        target_count: int,
+        existing_point_ids: set[str],
+        progress: Progress,
+        task: Any,
+    ) -> tuple[int, int, int, int]:
+        """Stream documents from Paperless and ingest them into Qdrant."""
+        semaphore = asyncio.Semaphore(self.concurrency)
+        scanned_count, indexed_count, skipped_empty, tax_relevant_count = 0, 0, 0, 0
+        page = 1
+        page_size = 100
+
+        while scanned_count < target_count:
+            current_page_size = min(page_size, target_count - scanned_count)
+            page_url = f"{self.paperless_url}/api/documents/?page={page}&page_size={current_page_size}"
+            resp = await http_client.get(page_url)
+            resp.raise_for_status()
+            data = resp.json()
+            results = data.get("results", [])
+            if not results:
+                break
+
+            page_docs = [
+                AuditDocument.from_raw(self._resolve_document_dict(raw))
+                for raw in results
+            ]
+            scanned_count += len(page_docs)
+
+            idx, skp, tx = await self._process_page_chunks(
+                page_docs, semaphore, existing_point_ids, progress, task
+            )
+            indexed_count += idx
+            skipped_empty += skp
+            tax_relevant_count += tx
+
+            if not data.get("next"):
+                break
+            page += 1
+
+        return scanned_count, indexed_count, skipped_empty, tax_relevant_count
+
     async def run(
         self,
         limit: int | None = None,
@@ -262,7 +326,7 @@ class PaperlessIngestRunner:
         async with httpx.AsyncClient(
             headers=headers,
             timeout=settings.paperless_timeout,
-            verify=False,
+            verify=settings.paperless_ssl_verify,
         ) as http_client:
             await self._fetch_metadata_maps(http_client)
 
@@ -280,12 +344,6 @@ class PaperlessIngestRunner:
             )
 
             # Step 4: Stream and ingest with progress bar
-            semaphore = asyncio.Semaphore(self.concurrency)
-            scanned_count = 0
-            indexed_count = 0
-            skipped_empty = 0
-            tax_relevant_count = 0
-
             existing_point_ids = await self._get_existing_point_ids()
             if existing_point_ids:
                 c.print(
@@ -305,39 +363,18 @@ class PaperlessIngestRunner:
                 task = progress.add_task(
                     "Ingesting documents into Qdrant...", total=target_count
                 )
-
-                page = 1
-                page_size = 100
-
-                while scanned_count < target_count:
-                    current_page_size = min(page_size, target_count - scanned_count)
-                    page_url = f"{self.paperless_url}/api/documents/?page={page}&page_size={current_page_size}"
-                    resp = await http_client.get(page_url)
-                    resp.raise_for_status()
-                    data = resp.json()
-                    results = data.get("results", [])
-                    if not results:
-                        break
-
-                    page_docs = [
-                        AuditDocument.from_raw(self._resolve_document_dict(raw))
-                        for raw in results
-                    ]
-                    scanned_count += len(page_docs)
-
-                    for i in range(0, len(page_docs), self.batch_size):
-                        chunk = page_docs[i : i + self.batch_size]
-                        idx_cnt, skp_cnt, tx_cnt = await self._process_chunk(
-                            chunk, semaphore, existing_point_ids
-                        )
-                        indexed_count += idx_cnt
-                        skipped_empty += skp_cnt
-                        tax_relevant_count += tx_cnt
-                        progress.update(task, advance=len(chunk))
-
-                    if not data.get("next"):
-                        break
-                    page += 1
+                (
+                    scanned_count,
+                    indexed_count,
+                    skipped_empty,
+                    tax_relevant_count,
+                ) = await self._stream_and_ingest(
+                    http_client,
+                    target_count,
+                    existing_point_ids,
+                    progress,
+                    task,
+                )
 
         elapsed = time.perf_counter() - start_time
         throughput = round(indexed_count / elapsed, 2) if elapsed > 0 else 0.0

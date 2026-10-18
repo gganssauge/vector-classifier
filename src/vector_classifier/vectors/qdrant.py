@@ -150,7 +150,7 @@ class QdrantStorageManager:
                     wait=False,
                 )
         except Exception as e:
-            logger.error("Failed to ensure collection '%s': %s", self.collection, e)
+            logger.exception("Failed to ensure collection '%s'", self.collection)
             raise QdrantStorageError(
                 f"Failed to ensure collection '{self.collection}': {e}"
             ) from e
@@ -167,7 +167,7 @@ class QdrantStorageManager:
                     self._client = None
             await self.ensure_collection()
         except Exception as e:
-            logger.error("Failed to recreate collection '%s': %s", self.collection, e)
+            logger.exception("Failed to recreate collection '%s'", self.collection)
             raise QdrantStorageError(
                 f"Failed to recreate collection '{self.collection}': {e}"
             ) from e
@@ -192,7 +192,7 @@ class QdrantStorageManager:
                 wait=wait,
             )
         except Exception as e:
-            logger.error("Failed to batch upsert %d points: %s", len(points), e)
+            logger.exception("Failed to batch upsert %d points", len(points))
             raise QdrantStorageError(
                 f"Failed to batch upsert {len(points)} points: {e}"
             ) from e
@@ -223,7 +223,7 @@ class QdrantStorageManager:
             )
             await self.upsert_documents_batch(points=[point], wait=False)
         except Exception as e:
-            logger.error("Failed to upsert point '%s': %s", point_id, e)
+            logger.exception("Failed to upsert point '%s'", point_id)
             raise QdrantStorageError(
                 f"Failed to upsert document '{point_id}': {e}"
             ) from e
@@ -276,7 +276,7 @@ class QdrantStorageManager:
         except QdrantStorageError:
             raise
         except Exception as e:
-            logger.error("Vector search failed for '%s': %s", vector_name, e)
+            logger.exception("Vector search failed for '%s'", vector_name)
             raise QdrantStorageError(
                 f"Vector search failed for '{vector_name}': {e}"
             ) from e

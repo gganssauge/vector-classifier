@@ -29,8 +29,9 @@ def cosine_similarity(vec1: list[float], vec2: list[float]) -> float:
     dot_product = sum(a * b for a, b in zip(vec1, vec2))
     norm1 = math.sqrt(sum(a * a for a in vec1))
     norm2 = math.sqrt(sum(b * b for b in vec2))
-    if norm1 == 0.0 or norm2 == 0.0:
+    if math.isclose(norm1, 0.0, abs_tol=1e-9) or math.isclose(norm2, 0.0, abs_tol=1e-9):
         return 0.0
+
     val = dot_product / (norm1 * norm2)
     return max(-1.0, min(1.0, val))
 
@@ -78,6 +79,24 @@ def map_to_canonical_macro_tag(raw_tag: str) -> str | None:
         if any(normalized == kw.lower() for kw in anchor.keywords):
             return anchor.name
     return None
+
+
+def _extract_neighbor_canonical_tags(neighbor: Any) -> set[str]:
+    """Extract canonical macro-tags from a Qdrant neighbor point."""
+    payload = getattr(neighbor, "payload", {}) or {}
+    raw_tags = payload.get("tags") or payload.get("tags_original") or []
+    if isinstance(raw_tags, str):
+        raw_tags = [raw_tags]
+    elif not isinstance(raw_tags, list):
+        raw_tags = []
+
+    canonical_tags: set[str] = set()
+    for t in raw_tags:
+        if isinstance(t, str):
+            canonical = map_to_canonical_macro_tag(t)
+            if canonical:
+                canonical_tags.add(canonical)
+    return canonical_tags
 
 
 _DEFAULT: Any = object()
@@ -310,7 +329,7 @@ class VectorClassifierEngine:
                 )
 
         await self._apply_knn_tag_votes(content_vector, qualifying_tags, tag_scores)
-        return sorted(list(qualifying_tags)), tag_scores, matched_anchors
+        return sorted(qualifying_tags), tag_scores, matched_anchors
 
     async def _apply_knn_tag_votes(
         self,
@@ -332,22 +351,7 @@ class VectorClassifierEngine:
 
             neighbor_tag_counts: dict[str, int] = {}
             for n in all_neighbors:
-                payload = getattr(n, "payload", {}) or {}
-                raw_tags = payload.get("tags") or payload.get("tags_original") or []
-                if isinstance(raw_tags, str):
-                    raw_tags = [raw_tags]
-                elif not isinstance(raw_tags, list):
-                    raw_tags = []
-
-                # Map raw tags to canonical macro-tags and deduplicate per neighbor
-                neighbor_canonical_tags: set[str] = set()
-                for t in raw_tags:
-                    if isinstance(t, str):
-                        canonical = map_to_canonical_macro_tag(t)
-                        if canonical:
-                            neighbor_canonical_tags.add(canonical)
-
-                for tag in neighbor_canonical_tags:
+                for tag in _extract_neighbor_canonical_tags(n):
                     neighbor_tag_counts[tag] = neighbor_tag_counts.get(tag, 0) + 1
 
             for tag, count in neighbor_tag_counts.items():
@@ -366,11 +370,17 @@ class VectorClassifierEngine:
         header_content: str | None = None,
     ) -> VectorClassificationResult:
         """Execute full semantic vector classification pipeline for a document."""
+        logger.debug(
+            "Executing vector classification for filename='%s' sha256='%s'",
+            filename,
+            sha256,
+        )
         header_text = (
             header_content
             if header_content is not None
             else extract_header_content(content)
         )
+
         (
             header_vector,
             content_vector,

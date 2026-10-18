@@ -33,9 +33,9 @@ def sanitize_text(text: str) -> str:
         return ""
     chars: list[str] = []
     for ch in text:
-        if ch in ("\t", "\n", "\r"):
-            chars.append(ch)
-        elif unicodedata.category(ch) != "Cc" and ord(ch) != 127:
+        if ch in ("\t", "\n", "\r") or (
+            unicodedata.category(ch) != "Cc" and ord(ch) != 127
+        ):
             chars.append(ch)
     return "".join(chars).strip()
 

@@ -60,7 +60,7 @@ app = FastAPI(
 )
 
 
-@app.get("/health", response_model=HealthResponse)
+@app.get("/health")
 async def health() -> HealthResponse:
     """Service health and connectivity probe."""
     engine = get_engine()
@@ -82,7 +82,7 @@ async def health() -> HealthResponse:
     )
 
 
-@app.post("/api/v1/classify", response_model=ClassifyResponse)
+@app.post("/api/v1/classify")
 async def classify(payload: ClassifyRequest) -> ClassifyResponse:
     """Classify a document using vector representations."""
     engine = get_engine()

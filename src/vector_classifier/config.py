@@ -62,6 +62,10 @@ class Settings(BaseSettings):
         default=60.0,
         validation_alias="PAPERLESS_TIMEOUT",
     )
+    paperless_ssl_verify: bool = Field(
+        default=False,
+        validation_alias="PAPERLESS_SSL_VERIFY",
+    )
 
     # Server settings
     host: str = Field(default="0.0.0.0", validation_alias="HOST")
