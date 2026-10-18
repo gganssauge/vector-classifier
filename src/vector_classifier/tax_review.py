@@ -118,9 +118,9 @@ class TaxReviewManager:
     async def _load_candidate_rows(self, csv_path: Path) -> list[dict[str, Any]]:
         """Load candidate rows from CSV or fallback to Qdrant scroll."""
         if csv_path.exists():
-            with csv_path.open(encoding="utf-8") as f:
-                reader = csv.DictReader(f)
-                return list(reader)
+            content = await asyncio.to_thread(csv_path.read_text, encoding="utf-8")
+            reader = csv.DictReader(content.splitlines())
+            return list(reader)
 
         candidate_rows: list[dict[str, Any]] = []
         q_client = self.qdrant.client
@@ -150,6 +150,59 @@ class TaxReviewManager:
                 break
         return candidate_rows
 
+    async def _tag_single_candidate(
+        self,
+        row: dict[str, Any],
+        review_tag_id: int,
+        privat_tag_id: int | None,
+        vermietung_tag_id: int | None,
+        client: httpx.AsyncClient,
+        semaphore: asyncio.Semaphore,
+        dry_run: bool,
+        out: Console,
+    ) -> str:
+        raw_pid = row.get("paperless_id")
+        if not raw_pid:
+            return "skip"
+        pid = int(raw_pid)
+        pred_cat = str(row.get("predicted_tax_category", "")).lower()
+        target_tag_id = vermietung_tag_id if "anlage-v" in pred_cat else privat_tag_id
+
+        async with semaphore:
+            try:
+                doc_resp = await client.get(
+                    f"{self.paperless_url}/api/documents/{pid}/"
+                )
+                if doc_resp.status_code != 200:
+                    out.print(
+                        f"[red]Failed to fetch doc {pid}: HTTP {doc_resp.status_code}[/red]"
+                    )
+                    return "error"
+
+                doc_data = doc_resp.json()
+                current_tags = list(doc_data.get("tags", []))
+                new_tags = list(current_tags)
+
+                if review_tag_id not in new_tags:
+                    new_tags.append(review_tag_id)
+                if target_tag_id and target_tag_id not in new_tags:
+                    new_tags.append(target_tag_id)
+
+                if set(new_tags) == set(current_tags):
+                    return "already_tagged"
+
+                if not dry_run:
+                    patch_resp = await client.patch(
+                        f"{self.paperless_url}/api/documents/{pid}/",
+                        json={"tags": new_tags},
+                    )
+                    patch_resp.raise_for_status()
+
+                return "updated"
+            except Exception as exc:
+                out.print(f"[red]Error tagging doc {pid}: {exc}[/red]")
+                return "error"
+
     async def tag_candidates(
         self,
         csv_path: Path = DEFAULT_CANDIDATES_CSV,
@@ -178,61 +231,132 @@ class TaxReviewManager:
 
             semaphore = asyncio.Semaphore(4)
 
-            async def _process_row(row: dict[str, Any]) -> str:
-                raw_pid = row.get("paperless_id")
-                if not raw_pid:
-                    return "skip"
-                pid = int(raw_pid)
-                pred_cat = str(row.get("predicted_tax_category", "")).lower()
-                target_tag_id = (
-                    vermietung_tag_id if "anlage-v" in pred_cat else privat_tag_id
+            tasks = [
+                self._tag_single_candidate(
+                    row=r,
+                    review_tag_id=review_tag_id,
+                    privat_tag_id=privat_tag_id,
+                    vermietung_tag_id=vermietung_tag_id,
+                    client=client,
+                    semaphore=semaphore,
+                    dry_run=dry_run,
+                    out=out,
                 )
-
-                async with semaphore:
-                    try:
-                        doc_resp = await client.get(
-                            f"{self.paperless_url}/api/documents/{pid}/"
-                        )
-                        if doc_resp.status_code != 200:
-                            out.print(
-                                f"[red]Failed to fetch doc {pid}: HTTP {doc_resp.status_code}[/red]"
-                            )
-                            return "error"
-
-                        doc_data = doc_resp.json()
-                        current_tags = list(doc_data.get("tags", []))
-                        new_tags = list(current_tags)
-
-                        if review_tag_id not in new_tags:
-                            new_tags.append(review_tag_id)
-                        if target_tag_id and target_tag_id not in new_tags:
-                            new_tags.append(target_tag_id)
-
-                        if set(new_tags) == set(current_tags):
-                            return "already_tagged"
-
-                        if not dry_run:
-                            patch_resp = await client.patch(
-                                f"{self.paperless_url}/api/documents/{pid}/",
-                                json={"tags": new_tags},
-                            )
-                            patch_resp.raise_for_status()
-
-                        return "updated"
-                    except Exception as exc:
-                        out.print(f"[red]Error tagging doc {pid}: {exc}[/red]")
-                        return "error"
-
-            results = await asyncio.gather(*[_process_row(r) for r in candidate_rows])
+                for r in candidate_rows
+            ]
+            results = await asyncio.gather(*tasks)
             for res in results:
-                if res == "updated":
-                    stats["updated"] += 1
-                elif res == "already_tagged":
-                    stats["already_tagged"] += 1
+                if res in stats:
+                    stats[res] += 1
                 elif res == "error":
                     stats["errors"] += 1
 
         return stats
+
+    async def _apply_confirmed_sync(
+        self,
+        candidate_point: Any,
+        doc: dict[str, Any],
+        payload: dict[str, Any],
+        is_vermietung: bool,
+        dry_run: bool,
+    ) -> None:
+        category = (
+            "steuer:anlage-v"
+            if is_vermietung
+            else payload.get("tax_category", "steuer:werbungskosten")
+        )
+        source_name = "steuern-vermietung" if is_vermietung else "steuern-privat"
+        patch = {
+            "is_tax_curated": True,
+            "is_tax_relevant": True,
+            "tax_review_required": False,
+            "tax_confidence": 1.0,
+            "tax_source": source_name,
+            "tax_category": category,
+        }
+        if not dry_run:
+            await self.qdrant.client.set_payload(
+                collection_name=self.qdrant.collection,
+                payload=patch,
+                points=[candidate_point.id],
+                wait=False,
+            )
+            target_file = self.vermietung_file if is_vermietung else self.privat_file
+            self._append_to_tax_file(target_file, doc, payload)
+
+    async def _apply_rejected_sync(
+        self,
+        candidate_point: Any,
+        dry_run: bool,
+    ) -> None:
+        patch = {
+            "is_tax_curated": False,
+            "is_tax_relevant": False,
+            "tax_review_required": False,
+            "tax_confidence": 0.0,
+            "tax_source": None,
+            "tax_category": None,
+        }
+        if not dry_run:
+            await self.qdrant.client.set_payload(
+                collection_name=self.qdrant.collection,
+                payload=patch,
+                points=[candidate_point.id],
+                wait=False,
+            )
+
+    async def _sync_single_candidate(
+        self,
+        candidate_point: Any,
+        http_client: httpx.AsyncClient,
+        review_tag_id: int | None,
+        tax_tag_ids: set[int],
+        vermietung_tag_id: int | None,
+        dry_run: bool,
+        out: Console,
+    ) -> str:
+        p = candidate_point.payload or {}
+        pid = p.get("paperless_id")
+        if not pid:
+            return "skip"
+
+        try:
+            doc_resp = await http_client.get(
+                f"{self.paperless_url}/api/documents/{pid}/"
+            )
+            if doc_resp.status_code != 200:
+                return "error"
+
+            doc = doc_resp.json()
+            current_tags = set(doc.get("tags", []))
+
+            if review_tag_id and review_tag_id in current_tags:
+                return "pending"
+
+            has_tax = bool(current_tags & tax_tag_ids)
+            if has_tax:
+                is_vermietung = bool(
+                    vermietung_tag_id and vermietung_tag_id in current_tags
+                )
+                await self._apply_confirmed_sync(
+                    candidate_point=candidate_point,
+                    doc=doc,
+                    payload=p,
+                    is_vermietung=is_vermietung,
+                    dry_run=dry_run,
+                )
+                return "confirmed"
+
+            await self._apply_rejected_sync(
+                candidate_point=candidate_point,
+                dry_run=dry_run,
+            )
+            return "rejected"
+
+        except Exception as exc:
+            out.print(f"[red]Error syncing doc {pid}: {exc}[/red]")
+            return "error"
 
     async def sync_curated(
         self,
@@ -294,87 +418,18 @@ class TaxReviewManager:
             }
 
             for r in candidates:
-                p = r.payload or {}
-                pid = p.get("paperless_id")
-                if not pid:
-                    continue
-
-                try:
-                    doc_resp = await http_client.get(
-                        f"{self.paperless_url}/api/documents/{pid}/"
-                    )
-                    if doc_resp.status_code != 200:
-                        stats["errors"] += 1
-                        continue
-
-                    doc = doc_resp.json()
-                    current_tags = set(doc.get("tags", []))
-
-                    # If review tag is still present -> still pending
-                    if review_tag_id and review_tag_id in current_tags:
-                        stats["pending"] += 1
-                        continue
-
-                    # If user removed review tag, check if any tax tag is present
-                    has_tax = bool(current_tags & tax_tag_ids)
-
-                    if has_tax:
-                        # Confirmed!
-                        is_vermietung = bool(
-                            vermietung_tag_id and vermietung_tag_id in current_tags
-                        )
-                        category = (
-                            "steuer:anlage-v"
-                            if is_vermietung
-                            else p.get("tax_category", "steuer:werbungskosten")
-                        )
-                        source_name = (
-                            "steuern-vermietung" if is_vermietung else "steuern-privat"
-                        )
-                        patch = {
-                            "is_tax_curated": True,
-                            "is_tax_relevant": True,
-                            "tax_review_required": False,
-                            "tax_confidence": 1.0,
-                            "tax_source": source_name,
-                            "tax_category": category,
-                        }
-                        if not dry_run:
-                            await client.set_payload(
-                                collection_name=manager.collection,
-                                payload=patch,
-                                points=[r.id],
-                                wait=False,
-                            )
-                            # Append to curated text file
-                            target_file = (
-                                self.vermietung_file
-                                if is_vermietung
-                                else self.privat_file
-                            )
-                            self._append_to_tax_file(target_file, doc, p)
-                        stats["confirmed"] += 1
-                    else:
-                        # Rejected!
-                        patch = {
-                            "is_tax_curated": False,
-                            "is_tax_relevant": False,
-                            "tax_review_required": False,
-                            "tax_confidence": 0.0,
-                            "tax_source": None,
-                            "tax_category": None,
-                        }
-                        if not dry_run:
-                            await client.set_payload(
-                                collection_name=manager.collection,
-                                payload=patch,
-                                points=[r.id],
-                                wait=False,
-                            )
-                        stats["rejected"] += 1
-
-                except Exception as exc:
-                    out.print(f"[red]Error syncing doc {pid}: {exc}[/red]")
+                res = await self._sync_single_candidate(
+                    candidate_point=r,
+                    http_client=http_client,
+                    review_tag_id=review_tag_id,
+                    tax_tag_ids=tax_tag_ids,
+                    vermietung_tag_id=vermietung_tag_id,
+                    dry_run=dry_run,
+                    out=out,
+                )
+                if res in stats:
+                    stats[res] += 1
+                elif res == "error":
                     stats["errors"] += 1
 
         return stats
@@ -418,7 +473,7 @@ class TaxReviewManager:
             except Exception:
                 pass
 
-        title_slug = re.sub(r"[^\w\-_.]", "", doc.get("title", "document"))
+        title_slug = re.sub(r"[^\w\-.]", "", doc.get("title", "document"))
         id_part = f"{eid}_" if eid else f"{doc_id}_"
         line = f"./{year}/{id_part}{title_slug}.pdf\n"
 

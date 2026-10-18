@@ -12,6 +12,7 @@ app = typer.Typer(
     add_completion=False,
 )
 console = Console()
+DRY_RUN_OPTION: str = "--dry-run/--no-dry-run"
 
 
 @app.command()
@@ -67,7 +68,7 @@ def audit(
     ),
     dry_run: bool = typer.Option(
         True,
-        "--dry-run/--no-dry-run",
+        DRY_RUN_OPTION,
         help="Dry-run mode: do not write changes to Paperless",
     ),
     concurrency: int = typer.Option(
@@ -250,7 +251,7 @@ def tag_candidates(
     ),
     dry_run: bool = typer.Option(
         False,
-        "--dry-run/--no-dry-run",
+        DRY_RUN_OPTION,
         help="Dry run without modifying Paperless tags",
     ),
 ) -> None:
@@ -297,7 +298,7 @@ def sync_curated(
     ),
     dry_run: bool = typer.Option(
         False,
-        "--dry-run/--no-dry-run",
+        DRY_RUN_OPTION,
         help="Dry run without writing updates to Qdrant or text files",
     ),
 ) -> None:

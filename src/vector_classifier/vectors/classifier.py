@@ -99,6 +99,22 @@ def _extract_neighbor_canonical_tags(neighbor: Any) -> set[str]:
     return canonical_tags
 
 
+TAX_DISQUALIFYING_PATTERNS = (
+    "separaten steuermitteilung",
+    "separate steuermitteilung",
+    "auf der separaten steuermitteilung",
+)
+
+
+def is_tax_disqualified(content: str, filename: str = "") -> bool:
+    """Check if document explicitly defers tax data to a separate document."""
+    text_lower = content.lower()
+    fn_lower = filename.lower()
+    if "steuermitteilung" in fn_lower or "steuerbescheinigung" in fn_lower:
+        return False
+    return any(p in text_lower for p in TAX_DISQUALIFYING_PATTERNS)
+
+
 _DEFAULT: Any = object()
 
 
@@ -212,10 +228,17 @@ class VectorClassifierEngine:
         return predicted_doc_type, top_score, matched_anchors
 
     async def _classify_tax_relevance(
-        self, content_vector: list[float]
+        self,
+        content_vector: list[float],
+        content_text: str = "",
+        filename: str = "",
     ) -> tuple[bool, float, str | None, bool, list[dict[str, Any]]]:
         """Classify hybrid tax relevance using semantic anchors and Qdrant k-NN search."""
+        if is_tax_disqualified(content_text, filename):
+            return False, 0.0, None, False, []
+
         tax_anchors = get_tax_anchors()
+
         tax_scores: list[tuple[SemanticAnchor, float]] = []
         for anchor in tax_anchors:
             anchor_vec = await self._get_or_compute_anchor_embedding(anchor)
@@ -395,7 +418,12 @@ class VectorClassifierEngine:
             tax_cat,
             tax_review,
             tax_anchors,
-        ) = await self._classify_tax_relevance(content_vector)
+        ) = await self._classify_tax_relevance(
+            content_vector,
+            content_text=content,
+            filename=filename,
+        )
+
         pred_tags, tag_scores, theme_anchors = await self._classify_thematic_tags(
             content_vector
         )

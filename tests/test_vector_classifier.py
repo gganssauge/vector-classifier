@@ -15,6 +15,7 @@ from vector_classifier.vectors.classifier import (
     VectorClassifierEngine,
     cosine_similarity,
     extract_header_content,
+    is_tax_disqualified,
 )
 from vector_classifier.vectors.client import OllamaEmbeddingClient
 from vector_classifier.vectors.qdrant import QdrantStorageError, QdrantStorageManager
@@ -580,3 +581,85 @@ async def test_knn_canonical_macro_tag_mapping():
     # Unmapped tags and "Sonstiges" -> excluded
     assert "custom-unmapped" not in result.predicted_tags
     assert "Sonstiges" not in result.predicted_tags
+
+
+# ---------------------------------------------------------------------------
+# Tax Disqualification Tests
+# ---------------------------------------------------------------------------
+def test_is_tax_disqualified():
+    """Verify negative tax disclaimer detection and exceptions."""
+    disclaimer_text = (
+        "Informationen zur steuerlichen Behandlung dieses Geschäftsvorgangs "
+        "und den auf Ihrem Konto gebuchten Endbetrag finden Sie auf der "
+        "separaten Steuermitteilung."
+    )
+    # Generic document containing the disclaimer -> disqualified
+    assert is_tax_disqualified(disclaimer_text, filename="Abrechnung_123.pdf") is True
+    assert (
+        is_tax_disqualified(
+            "Hinweis: siehe separate Steuermitteilung", filename="Fondskauf.pdf"
+        )
+        is True
+    )
+
+    # Document whose title indicates it IS the Steuermitteilung -> NOT disqualified
+    assert (
+        is_tax_disqualified(
+            disclaimer_text, filename="Steuermitteilung_hausInvest_2025.pdf"
+        )
+        is False
+    )
+    assert (
+        is_tax_disqualified(
+            disclaimer_text, filename="Jahres_Steuerbescheinigung_2025.pdf"
+        )
+        is False
+    )
+
+    # Normal tax invoice without disclaimer -> NOT disqualified
+    assert (
+        is_tax_disqualified(
+            "Handwerkerrechnung Malerarbeiten § 35a EStG", filename="Rechnung.pdf"
+        )
+        is False
+    )
+
+
+@pytest.mark.asyncio
+async def test_classify_disqualified_transaction_doc():
+    """Verify classify drops tax relevance when disclaimer is present."""
+    mock_ollama = AsyncMock(spec=OllamaEmbeddingClient)
+    mock_ollama.get_document_embeddings.return_value = ([0.0] * 8, [0.0] * 8)
+
+    anchor_dict = {a.name: [0.0] * 8 for a in get_tax_anchors()}
+
+    # Even if Qdrant k-NN returns a strong tax match:
+    p1 = ScoredPoint(
+        id="1",
+        version=1,
+        score=0.95,
+        payload={"is_tax_relevant": True, "tax_category": "steuer:werbungskosten"},
+        vector=None,
+    )
+    mock_qdrant = AsyncMock(spec=QdrantStorageManager)
+    mock_qdrant.search_by_vector.return_value = [p1]
+
+    engine = VectorClassifierEngine(
+        ollama_client=mock_ollama,
+        qdrant_manager=mock_qdrant,
+        anchor_embeddings=anchor_dict,
+    )
+    disclaimer_doc = (
+        "Wertpapier Abrechnung Kauf Fondanteile. "
+        "Informationen zur steuerlichen Behandlung dieses Geschäftsvorgangs "
+        "finden Sie auf der separaten Steuermitteilung."
+    )
+    result = await engine.classify(
+        content=disclaimer_doc,
+        filename="Abrechnung_Fonds.pdf",
+    )
+
+    assert result.is_tax_relevant is False
+    assert result.tax_review_required is False
+    assert result.tax_confidence == 0.0
+    assert result.tax_category is None

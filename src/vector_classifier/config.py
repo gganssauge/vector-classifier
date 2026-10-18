@@ -63,7 +63,7 @@ class Settings(BaseSettings):
         validation_alias="PAPERLESS_TIMEOUT",
     )
     paperless_ssl_verify: bool = Field(
-        default=False,
+        default=True,
         validation_alias="PAPERLESS_SSL_VERIFY",
     )
 
