@@ -208,13 +208,122 @@ uv run vector-classifier audit --source documents.jsonl --index --output-csv aud
 - `--index` / `--no-index`: Whether to upsert vectorized documents into Qdrant (default: `--no-index`).
 - `--concurrency`, `-c`: Maximum concurrent embedding requests to Ollama (default: 4).
 
-### Standalone Audit Script
+### `ingest`
 
-For convenience, `scripts/vector_audit_pass.py` provides a direct entry point:
+Ingests documents from Paperless-ngx directly into Qdrant, computing `header` and `content` dense vectors asynchronously via Ollama (`bge-m3`):
 
 ```bash
-uv run scripts/vector_audit_pass.py --source export.jsonl --output-csv audit.csv
+# Ingest all new/updated documents from Paperless
+uv run vector-classifier ingest
+
+# Recreate Qdrant collection fresh and re-ingest all documents
+uv run vector-classifier ingest --recreate --concurrency 8 --batch-size 50
 ```
+
+### `calibrate-tax`
+
+Calibrates tax relevance across three temporal zones using contrastive k-NN (`Score(Tax) vs Score(NonTax)`):
+
+```bash
+# Run 3-zone tax relevance calibration and export 2026+ candidates
+uv run vector-classifier calibrate-tax
+
+# Calibrate with custom threshold and files
+uv run vector-classifier calibrate-tax --threshold-knn 0.82 --candidates-csv tax_candidates_2026.csv
+```
+
+### `tag-candidates`
+
+Tags all tax candidates in Paperless in seconds using the Paperless Bulk API (`POST /api/documents/bulk_edit/`):
+
+```bash
+# Dry-run: inspect what would be tagged without modifying Paperless
+uv run vector-classifier tag-candidates --dry-run
+
+# Apply tags in Paperless (Steuern-Review + proposed Steuern-Privat / Steuern-Vermietung)
+uv run vector-classifier tag-candidates
+```
+
+### `sync-curated`
+
+Synchronizes reviewed candidate documents from Paperless back into Qdrant and updates ground-truth files:
+
+```bash
+# Dry-run check: verify status of human review
+uv run vector-classifier sync-curated --dry-run
+
+# Apply sync: marks confirmed tax docs and records confirmed non-tax anchors
+uv run vector-classifier sync-curated
+```
+
+---
+
+## Tax Relevance & Active Learning Workflow
+
+When new documents arrive in Paperless throughout the year, or after preparing the tax return, use this recurring 5-step active learning cycle:
+
+```text
+ ┌────────────────┐     ┌───────────────────┐     ┌───────────────────┐
+ │ 1. Ingest      │ ──> │ 2. Calibrate      │ ──> │ 3. Bulk Tag       │
+ │    (Qdrant DB) │     │    (Find & Score) │     │    (Paperless UI) │
+ └────────────────┘     └───────────────────┘     └─────────┬─────────┘
+                                                            │
+ ┌────────────────┐     ┌───────────────────┐               │
+ │ 5. Verified!   │ <── │ 4. Sync Curated   │ <─────────────┘
+ │    (0 pending) │     │    (Active Learn) │   Human Review in UI
+ └────────────────┘     └───────────────────┘   (Remove 'Steuern-Review')
+```
+
+### Step-by-Step Guide
+
+1. **Ingest New Documents:**
+   Index any newly added or scanned documents from Paperless into Qdrant:
+
+   ```bash
+   uv run vector-classifier ingest
+   ```
+
+2. **Calibrate Tax Relevance:**
+   Run contrastive k-NN against curated tax anchors and non-tax negative examples:
+
+   ```bash
+   uv run vector-classifier calibrate-tax
+   ```
+
+   This generates `tax_candidates_2026.csv` with newly discovered tax candidates (excluding bank statements and known non-tax patterns).
+
+3. **Tag Candidates in Paperless:**
+   Apply tags via the Paperless Bulk API:
+
+   ```bash
+   uv run vector-classifier tag-candidates
+   ```
+
+   Each candidate receives the yellow tag `Steuern-Review` **plus** the proposed category tag (`Steuern-Privat` or `Steuern-Vermietung`).
+
+4. **Human Review in Paperless UI:**
+   Filter Paperless documents by the tag `Steuern-Review`:
+   - **Accept / Confirmed:** Delete **only** the `Steuern-Review` tag. The proposed category tag (`Steuern-Privat` or `Steuern-Vermietung`) stays on the document (1 click).
+   - **Reject / Not Tax-Relevant:** Delete **both** tags (or remove all tax tags).
+
+5. **Synchronize & Learn (Active Learning):**
+   Sync the human review decisions back into Qdrant and the curated datasets:
+
+   ```bash
+   uv run vector-classifier sync-curated
+   ```
+
+   - Confirmed tax receipts are marked `is_tax_curated=True` and appended to `steuern-privat.txt` or `steuern-vermietung.txt`.
+   - Rejected receipts (e.g. personal cable TV, securities settlements) are stored as curated negative examples (`tax_source="confirmed_nontax"`), preventing similar future documents from triggering false positives.
+
+6. **Verify Calibration:**
+   Re-run calibration to confirm all candidates are settled:
+
+   ```bash
+   uv run vector-classifier calibrate-tax
+   ```
+
+   Expected output: `Zone 2026+ (Candidates): 0 candidates`.
 
 ---
 

@@ -1,5 +1,6 @@
 """Qdrant storage manager and schema management."""
 
+import asyncio
 import logging
 import uuid
 from typing import Any
@@ -15,6 +16,7 @@ PAYLOAD_INDEXES: list[tuple[str, models.PayloadSchemaType]] = [
     ("paperless_id", models.PayloadSchemaType.INTEGER),
     ("doc_type", models.PayloadSchemaType.KEYWORD),
     ("is_tax_relevant", models.PayloadSchemaType.BOOL),
+    ("is_tax_curated", models.PayloadSchemaType.BOOL),
     ("tax_category", models.PayloadSchemaType.KEYWORD),
 ]
 
@@ -145,11 +147,54 @@ class QdrantStorageManager:
                     collection_name=self.collection,
                     field_name=field_name,
                     field_schema=schema_type,
+                    wait=False,
                 )
         except Exception as e:
-            logger.error("Failed to ensure collection '%s': %s", self.collection, e)
+            logger.exception("Failed to ensure collection '%s'", self.collection)
             raise QdrantStorageError(
                 f"Failed to ensure collection '{self.collection}': {e}"
+            ) from e
+
+    async def recreate_collection(self) -> None:
+        """Drop collection if it exists and recreate with schema and payload indexes."""
+        try:
+            if await self.client.collection_exists(self.collection):
+                logger.info("Dropping existing collection '%s'", self.collection)
+                await self.client.delete_collection(self.collection)
+                await asyncio.sleep(1.0)
+                if not self._external_client and self._client is not None:
+                    await self._client.close()
+                    self._client = None
+            await self.ensure_collection()
+        except Exception as e:
+            logger.exception("Failed to recreate collection '%s'", self.collection)
+            raise QdrantStorageError(
+                f"Failed to recreate collection '{self.collection}': {e}"
+            ) from e
+
+    async def upsert_documents_batch(
+        self,
+        points: list[models.PointStruct],
+        wait: bool = False,
+    ) -> None:
+        """Upsert a batch of document points into Qdrant.
+
+        Args:
+            points: List of PointStruct instances to upsert.
+            wait: Whether to wait for changes to be committed to disk.
+        """
+        if not points:
+            return
+        try:
+            await self.client.upsert(
+                collection_name=self.collection,
+                points=points,
+                wait=wait,
+            )
+        except Exception as e:
+            logger.exception("Failed to batch upsert %d points", len(points))
+            raise QdrantStorageError(
+                f"Failed to batch upsert {len(points)} points: {e}"
             ) from e
 
     async def upsert_document(
@@ -176,13 +221,9 @@ class QdrantStorageManager:
                 },
                 payload=payload,
             )
-            await self.client.upsert(
-                collection_name=self.collection,
-                points=[point],
-                wait=False,
-            )
+            await self.upsert_documents_batch(points=[point], wait=False)
         except Exception as e:
-            logger.error("Failed to upsert point '%s': %s", point_id, e)
+            logger.exception("Failed to upsert point '%s'", point_id)
             raise QdrantStorageError(
                 f"Failed to upsert document '{point_id}': {e}"
             ) from e
@@ -235,7 +276,7 @@ class QdrantStorageManager:
         except QdrantStorageError:
             raise
         except Exception as e:
-            logger.error("Vector search failed for '%s': %s", vector_name, e)
+            logger.exception("Vector search failed for '%s'", vector_name)
             raise QdrantStorageError(
                 f"Vector search failed for '{vector_name}': {e}"
             ) from e

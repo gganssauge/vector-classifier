@@ -9,6 +9,7 @@ Standalone microservice for semantic vector classification, tax relevance evalua
 - **Git Branching:** Direct pushes to `main` are strictly forbidden. Always use feature branches (`feature/<name>`) and conventional commits (`feat:`, `fix:`, `docs:`, `chore:`).
 - **Quality Gates:** Pre-commit hooks (`prek`) enforce `ruff format`, `ruff check`, and type checks automatically on `git commit`. Do not run them manually before committing.
 - **Architecture Boundaries:** This microservice acts as an inference and orchestration client for Ollama and Qdrant. It does NOT install local GPU drivers or heavy PyTorch runtimes; all embedding generation is offloaded via HTTP to the cluster's GPU-backed Ollama instance (`bge-m3`).
+- **Paperless Bulk API:** Wann immer Änderungen (Tags, Korrespondenten, Dokumenttypen etc.) an mehreren Paperless-Dokumenten durchgeführt werden, muss zwingend das native Bulk-API (`POST /api/documents/bulk_edit/`) verwendet werden. Einzelne `PATCH`-Aufrufe pro Dokument lösen in Paperless/Django jeweils vollständige Model-Validierungen, Suchindex-Reindizierungen (Tantivy/Whoosh) und WebSocket-Broadcasts aus und führen zu extremen Latenzen (Sekunden statt Millisekunden).
 
 ## Key Commands
 

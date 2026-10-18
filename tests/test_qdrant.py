@@ -127,6 +127,7 @@ async def test_ensure_collection_creates_when_not_exists():
         "paperless_id",
         "doc_type",
         "is_tax_relevant",
+        "is_tax_curated",
         "tax_category",
     ]
 
@@ -310,3 +311,67 @@ async def test_context_manager_and_close():
 
     mock_client.close.assert_awaited_once()
     assert manager._client is None
+
+
+@pytest.mark.asyncio
+async def test_recreate_collection_success():
+    """Verify recreate_collection deletes existing collection and calls ensure_collection."""
+    mock_client = AsyncMock()
+    mock_client.collection_exists.side_effect = [True, False]
+    manager = QdrantStorageManager(client=mock_client)
+
+    await manager.recreate_collection()
+
+    mock_client.delete_collection.assert_awaited_once_with(manager.collection)
+    mock_client.create_collection.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_recreate_collection_error():
+    """Verify recreate_collection raises QdrantStorageError on failure."""
+    mock_client = AsyncMock()
+    mock_client.collection_exists.side_effect = RuntimeError("Qdrant error")
+    manager = QdrantStorageManager(client=mock_client)
+
+    with pytest.raises(QdrantStorageError, match="Failed to recreate collection"):
+        await manager.recreate_collection()
+
+
+@pytest.mark.asyncio
+async def test_upsert_documents_batch_success():
+    """Verify upsert_documents_batch calls client.upsert with points list."""
+    mock_client = AsyncMock()
+    manager = QdrantStorageManager(client=mock_client)
+    points = [
+        models.PointStruct(id="1", vector={"content": [0.1]}, payload={"test": 1}),
+        models.PointStruct(id="2", vector={"content": [0.2]}, payload={"test": 2}),
+    ]
+
+    await manager.upsert_documents_batch(points)
+    mock_client.upsert.assert_awaited_once_with(
+        collection_name=manager.collection,
+        points=points,
+        wait=False,
+    )
+
+
+@pytest.mark.asyncio
+async def test_upsert_documents_batch_empty():
+    """Verify upsert_documents_batch does nothing if points list is empty."""
+    mock_client = AsyncMock()
+    manager = QdrantStorageManager(client=mock_client)
+
+    await manager.upsert_documents_batch([])
+    mock_client.upsert.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_upsert_documents_batch_error():
+    """Verify upsert_documents_batch raises QdrantStorageError on failure."""
+    mock_client = AsyncMock()
+    mock_client.upsert.side_effect = RuntimeError("Upsert error")
+    manager = QdrantStorageManager(client=mock_client)
+    points = [models.PointStruct(id="1", vector={"content": [0.1]}, payload={})]
+
+    with pytest.raises(QdrantStorageError, match="Failed to batch upsert"):
+        await manager.upsert_documents_batch(points)

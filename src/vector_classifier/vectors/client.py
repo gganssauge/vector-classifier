@@ -33,9 +33,9 @@ def sanitize_text(text: str) -> str:
         return ""
     chars: list[str] = []
     for ch in text:
-        if ch in ("\t", "\n", "\r"):
-            chars.append(ch)
-        elif unicodedata.category(ch) != "Cc" and ord(ch) != 127:
+        if ch in ("\t", "\n", "\r") or (
+            unicodedata.category(ch) != "Cc" and ord(ch) != 127
+        ):
             chars.append(ch)
     return "".join(chars).strip()
 
@@ -140,7 +140,7 @@ class OllamaEmbeddingClient:
             except (httpx.TransportError, httpx.TimeoutException) as exc:
                 last_exception = exc
                 if attempt < self.max_retries - 1:
-                    await asyncio.sleep(self.retry_delay * (2**attempt))
+                    await asyncio.sleep(self.retry_delay * 2**attempt)
                     continue
                 raise OllamaConnectionError(
                     f"Failed to connect to Ollama at {self.base_url} after {self.max_retries} attempts: {exc}"
@@ -160,6 +160,8 @@ class OllamaEmbeddingClient:
         the configured fallback token is embedded instead.
         """
         cleaned = sanitize_text(text)
+        if len(cleaned) > 6000:
+            cleaned = cleaned[:6000].strip()
         prompt = cleaned if cleaned else self.fallback_text
 
         payload = {
@@ -167,7 +169,18 @@ class OllamaEmbeddingClient:
             "prompt": prompt,
         }
 
-        data = await self._post_with_retry("/api/embeddings", payload)
+        while True:
+            try:
+                data = await self._post_with_retry("/api/embeddings", payload)
+                break
+            except OllamaResponseError as err:
+                is_context_err = "exceeds the context length" in str(err)
+                if is_context_err and len(payload["prompt"]) > 500:
+                    payload["prompt"] = payload["prompt"][
+                        : len(payload["prompt"]) // 2
+                    ].strip()
+                    continue
+                raise
 
         if "embedding" not in data:
             raise OllamaResponseError(

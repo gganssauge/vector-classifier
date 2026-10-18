@@ -29,8 +29,9 @@ def cosine_similarity(vec1: list[float], vec2: list[float]) -> float:
     dot_product = sum(a * b for a, b in zip(vec1, vec2))
     norm1 = math.sqrt(sum(a * a for a in vec1))
     norm2 = math.sqrt(sum(b * b for b in vec2))
-    if norm1 == 0.0 or norm2 == 0.0:
+    if math.isclose(norm1, 0.0, abs_tol=1e-9) or math.isclose(norm2, 0.0, abs_tol=1e-9):
         return 0.0
+
     val = dot_product / (norm1 * norm2)
     return max(-1.0, min(1.0, val))
 
@@ -43,6 +44,18 @@ def extract_header_content(content: str, max_chars: int = 3000) -> str:
         return content
     cut_idx = content.rfind("\n", 0, max_chars)
     if cut_idx > 500:
+        return content[:cut_idx].strip()
+    return content[:max_chars].strip()
+
+
+def extract_body_content(content: str, max_chars: int = 8000) -> str:
+    """Extract content body safely bounded by context window (up to ~8000 characters)."""
+    if not content:
+        return ""
+    if len(content) <= max_chars:
+        return content
+    cut_idx = content.rfind("\n", 0, max_chars)
+    if cut_idx > 2000:
         return content[:cut_idx].strip()
     return content[:max_chars].strip()
 
@@ -66,6 +79,24 @@ def map_to_canonical_macro_tag(raw_tag: str) -> str | None:
         if any(normalized == kw.lower() for kw in anchor.keywords):
             return anchor.name
     return None
+
+
+def _extract_neighbor_canonical_tags(neighbor: Any) -> set[str]:
+    """Extract canonical macro-tags from a Qdrant neighbor point."""
+    payload = getattr(neighbor, "payload", {}) or {}
+    raw_tags = payload.get("tags") or payload.get("tags_original") or []
+    if isinstance(raw_tags, str):
+        raw_tags = [raw_tags]
+    elif not isinstance(raw_tags, list):
+        raw_tags = []
+
+    canonical_tags: set[str] = set()
+    for t in raw_tags:
+        if isinstance(t, str):
+            canonical = map_to_canonical_macro_tag(t)
+            if canonical:
+                canonical_tags.add(canonical)
+    return canonical_tags
 
 
 _DEFAULT: Any = object()
@@ -181,10 +212,12 @@ class VectorClassifierEngine:
         return predicted_doc_type, top_score, matched_anchors
 
     async def _classify_tax_relevance(
-        self, content_vector: list[float]
+        self,
+        content_vector: list[float],
     ) -> tuple[bool, float, str | None, bool, list[dict[str, Any]]]:
-        """Classify hybrid tax relevance using semantic anchors and Qdrant k-NN search."""
+        """Classify contrastive tax relevance using semantic anchors and Qdrant k-NN search."""
         tax_anchors = get_tax_anchors()
+
         tax_scores: list[tuple[SemanticAnchor, float]] = []
         for anchor in tax_anchors:
             anchor_vec = await self._get_or_compute_anchor_embedding(anchor)
@@ -197,22 +230,33 @@ class VectorClassifierEngine:
         best_category: str | None = best_tax_anchor.name
 
         knn_tax_score, knn_category = await self._query_tax_knn(content_vector)
+        knn_nontax_score = await self._query_nontax_knn(content_vector)
+
         tax_confidence = round(max(anchor_tax_score, knn_tax_score), 4)
         if knn_tax_score > anchor_tax_score and knn_category:
             best_category = knn_category
 
-        if tax_confidence >= settings.threshold_tax_confident:
-            is_tax_relevant = True
-            tax_review_required = False
-            tax_category = best_category
-        elif tax_confidence >= settings.threshold_tax_review:
-            is_tax_relevant = True
-            tax_review_required = True
-            tax_category = best_category
-        else:
+        # Contrastive evaluation against non-tax neighbor:
+        # Contrastive evaluation against non-tax neighbor:
+        # If the non-tax neighbor clearly beats the tax score (margin >= 0.03) or below review threshold:
+        if (
+            knn_nontax_score >= tax_confidence + 0.03
+            or tax_confidence < settings.threshold_tax_review
+        ):
             is_tax_relevant = False
             tax_review_required = False
             tax_category = None
+        elif (
+            tax_confidence >= settings.threshold_tax_confident
+            and tax_confidence >= knn_nontax_score
+        ):
+            is_tax_relevant = True
+            tax_review_required = False
+            tax_category = best_category
+        else:
+            is_tax_relevant = True
+            tax_review_required = True
+            tax_category = best_category
 
         matched_anchors = [
             {
@@ -220,6 +264,7 @@ class VectorClassifierEngine:
                 "category": "tax",
                 "similarity": anchor_tax_score,
                 "knn_tax_score": knn_tax_score,
+                "knn_nontax_score": knn_nontax_score,
             }
         ]
         return (
@@ -229,6 +274,24 @@ class VectorClassifierEngine:
             tax_review_required,
             matched_anchors,
         )
+
+    async def _query_nontax_knn(self, content_vector: list[float]) -> float:
+        """Query Qdrant for top non-tax neighbor score."""
+        if self.qdrant_manager is None:
+            return 0.0
+        try:
+            nontax_neighbors = await self.qdrant_manager.search_by_vector(
+                vector_name="content",
+                vector=content_vector,
+                limit=1,
+                filter_criteria={"is_tax_relevant": False},
+            )
+            if not nontax_neighbors:
+                return 0.0
+            return max(0.0, float(getattr(nontax_neighbors[0], "score", 0.0)))
+        except Exception as exc:
+            logger.warning("k-NN non-tax vector search failed: %s", exc)
+        return 0.0
 
     async def _query_tax_knn(
         self, content_vector: list[float]
@@ -241,7 +304,7 @@ class VectorClassifierEngine:
                 vector_name="content",
                 vector=content_vector,
                 limit=5,
-                filter_criteria={"is_tax_relevant": True},
+                filter_criteria={"is_tax_curated": True, "is_tax_relevant": True},
             )
             if not tax_neighbors:
                 return 0.0, None
@@ -298,7 +361,7 @@ class VectorClassifierEngine:
                 )
 
         await self._apply_knn_tag_votes(content_vector, qualifying_tags, tag_scores)
-        return sorted(list(qualifying_tags)), tag_scores, matched_anchors
+        return sorted(qualifying_tags), tag_scores, matched_anchors
 
     async def _apply_knn_tag_votes(
         self,
@@ -320,22 +383,7 @@ class VectorClassifierEngine:
 
             neighbor_tag_counts: dict[str, int] = {}
             for n in all_neighbors:
-                payload = getattr(n, "payload", {}) or {}
-                raw_tags = payload.get("tags") or payload.get("tags_original") or []
-                if isinstance(raw_tags, str):
-                    raw_tags = [raw_tags]
-                elif not isinstance(raw_tags, list):
-                    raw_tags = []
-
-                # Map raw tags to canonical macro-tags and deduplicate per neighbor
-                neighbor_canonical_tags: set[str] = set()
-                for t in raw_tags:
-                    if isinstance(t, str):
-                        canonical = map_to_canonical_macro_tag(t)
-                        if canonical:
-                            neighbor_canonical_tags.add(canonical)
-
-                for tag in neighbor_canonical_tags:
+                for tag in _extract_neighbor_canonical_tags(n):
                     neighbor_tag_counts[tag] = neighbor_tag_counts.get(tag, 0) + 1
 
             for tag, count in neighbor_tag_counts.items():
@@ -354,11 +402,17 @@ class VectorClassifierEngine:
         header_content: str | None = None,
     ) -> VectorClassificationResult:
         """Execute full semantic vector classification pipeline for a document."""
+        logger.debug(
+            "Executing vector classification for filename='%s' sha256='%s'",
+            filename,
+            sha256,
+        )
         header_text = (
             header_content
             if header_content is not None
             else extract_header_content(content)
         )
+
         (
             header_vector,
             content_vector,
@@ -367,13 +421,26 @@ class VectorClassifierEngine:
         pred_doc_type, doc_confidence, doc_anchors = await self._classify_doc_type(
             header_vector
         )
-        (
-            is_tax,
-            tax_conf,
-            tax_cat,
-            tax_review,
-            tax_anchors,
-        ) = await self._classify_tax_relevance(content_vector)
+
+        is_kontoauszug = (
+            pred_doc_type == "Kontoauszug" or "kontoauszug" in filename.lower()
+        )
+
+        if is_kontoauszug:
+            is_tax = False
+            tax_conf = 0.0
+            tax_cat = None
+            tax_review = False
+            tax_anchors = []
+        else:
+            (
+                is_tax,
+                tax_conf,
+                tax_cat,
+                tax_review,
+                tax_anchors,
+            ) = await self._classify_tax_relevance(content_vector)
+
         pred_tags, tag_scores, theme_anchors = await self._classify_thematic_tags(
             content_vector
         )

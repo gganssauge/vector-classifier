@@ -67,13 +67,11 @@ def _normalize_raw_dict(doc: Any) -> dict[str, Any]:
 
 def _extract_paperless_id(doc: dict[str, Any]) -> int | str:
     """Extract paperless_id, id, or pk from raw document dict."""
-    raw_id = (
-        doc.get("paperless_id")
-        if doc.get("paperless_id") is not None
-        else doc.get("id")
-        if doc.get("id") is not None
-        else doc.get("pk")
-    )
+    raw_id = doc.get("paperless_id")
+    if raw_id is None:
+        raw_id = doc.get("id")
+    if raw_id is None:
+        raw_id = doc.get("pk")
     if raw_id is None:
         return ""
     try:

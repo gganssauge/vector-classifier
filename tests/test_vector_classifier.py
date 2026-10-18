@@ -512,9 +512,16 @@ async def test_knn_tax_weighted_score_and_cluster_selection():
     )
 
     mock_qdrant = AsyncMock(spec=QdrantStorageManager)
-    mock_qdrant.search_by_vector.side_effect = lambda vector_name, **kwargs: (
-        [p1, p2, p3] if kwargs.get("filter_criteria") else []
-    )
+
+    def mock_search(vector_name, **kwargs):
+        crit = kwargs.get("filter_criteria", {})
+        if crit.get("is_tax_relevant") is False:
+            return []
+        if crit.get("is_tax_relevant") is True or crit.get("is_tax_curated") is True:
+            return [p1, p2, p3]
+        return []
+
+    mock_qdrant.search_by_vector.side_effect = mock_search
 
     engine = VectorClassifierEngine(
         ollama_client=mock_ollama,
@@ -580,3 +587,189 @@ async def test_knn_canonical_macro_tag_mapping():
     # Unmapped tags and "Sonstiges" -> excluded
     assert "custom-unmapped" not in result.predicted_tags
     assert "Sonstiges" not in result.predicted_tags
+
+
+# ---------------------------------------------------------------------------
+# Contrastive Tax k-NN Tests
+# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_contrastive_knn_excludes_when_nontax_neighbor_wins():
+    """Verify document is excluded when non-tax neighbor clearly beats tax score (>= +0.03)."""
+    mock_ollama = AsyncMock(spec=OllamaEmbeddingClient)
+    mock_ollama.get_document_embeddings.return_value = ([0.0] * 8, [0.0] * 8)
+
+    anchor_dict = {a.name: [0.0] * 8 for a in get_tax_anchors()}
+
+    tax_pt = ScoredPoint(
+        id="1",
+        version=1,
+        score=0.86,
+        payload={"is_tax_relevant": True, "tax_category": "steuer:werbungskosten"},
+        vector=None,
+    )
+    nontax_pt = ScoredPoint(
+        id="2",
+        version=1,
+        score=0.96,
+        payload={"is_tax_relevant": False},
+        vector=None,
+    )
+
+    mock_qdrant = AsyncMock(spec=QdrantStorageManager)
+
+    def mock_search_by_vector(vector_name, **kwargs):
+        crit = kwargs.get("filter_criteria", {})
+        if crit.get("is_tax_relevant") is False:
+            return [nontax_pt]
+        if crit.get("is_tax_relevant") is True:
+            return [tax_pt]
+        return []
+
+    mock_qdrant.search_by_vector.side_effect = mock_search_by_vector
+
+    engine = VectorClassifierEngine(
+        ollama_client=mock_ollama,
+        qdrant_manager=mock_qdrant,
+        anchor_embeddings=anchor_dict,
+    )
+    result = await engine.classify(content="Wertpapierabrechnung Kauf Aktien")
+
+    # 0.96 (NonTax) >= 0.86 (Tax) + 0.03 -> Excluded
+    assert result.is_tax_relevant is False
+    assert result.tax_review_required is False
+    assert result.tax_category is None
+
+
+@pytest.mark.asyncio
+async def test_contrastive_knn_marks_review_on_close_boundary():
+    """Verify document is marked for review when tax score is high and close to non-tax score."""
+    mock_ollama = AsyncMock(spec=OllamaEmbeddingClient)
+    mock_ollama.get_document_embeddings.return_value = ([0.0] * 8, [0.0] * 8)
+
+    anchor_dict = {a.name: [0.0] * 8 for a in get_tax_anchors()}
+
+    tax_pt = ScoredPoint(
+        id="1",
+        version=1,
+        score=0.88,
+        payload={"is_tax_relevant": True, "tax_category": "steuer:werbungskosten"},
+        vector=None,
+    )
+    nontax_pt = ScoredPoint(
+        id="2",
+        version=1,
+        score=0.89,
+        payload={"is_tax_relevant": False},
+        vector=None,
+    )
+
+    mock_qdrant = AsyncMock(spec=QdrantStorageManager)
+
+    def mock_search_by_vector(vector_name, **kwargs):
+        crit = kwargs.get("filter_criteria", {})
+        if crit.get("is_tax_relevant") is False:
+            return [nontax_pt]
+        if crit.get("is_tax_relevant") is True:
+            return [tax_pt]
+        return []
+
+    mock_qdrant.search_by_vector.side_effect = mock_search_by_vector
+
+    engine = VectorClassifierEngine(
+        ollama_client=mock_ollama,
+        qdrant_manager=mock_qdrant,
+        anchor_embeddings=anchor_dict,
+    )
+    result = await engine.classify(content="Grenzfall Dokument")
+
+    # NonTax (0.89) - Tax (0.88) = 0.01 < 0.03 -> Boundary case queued for review
+    assert result.is_tax_relevant is True
+    assert result.tax_review_required is True
+    assert result.tax_category == "steuer:werbungskosten"
+
+
+@pytest.mark.asyncio
+async def test_contrastive_knn_confident_tax_when_tax_neighbor_wins():
+    """Verify document is confident tax when tax neighbor clearly beats non-tax neighbor."""
+    mock_ollama = AsyncMock(spec=OllamaEmbeddingClient)
+    mock_ollama.get_document_embeddings.return_value = ([0.0] * 8, [0.0] * 8)
+
+    anchor_dict = {a.name: [0.0] * 8 for a in get_tax_anchors()}
+
+    tax_pt = ScoredPoint(
+        id="1",
+        version=1,
+        score=0.95,
+        payload={"is_tax_relevant": True, "tax_category": "steuer:handwerker"},
+        vector=None,
+    )
+    nontax_pt = ScoredPoint(
+        id="2",
+        version=1,
+        score=0.65,
+        payload={"is_tax_relevant": False},
+        vector=None,
+    )
+
+    mock_qdrant = AsyncMock(spec=QdrantStorageManager)
+
+    def mock_search_by_vector(vector_name, **kwargs):
+        crit = kwargs.get("filter_criteria", {})
+        if crit.get("is_tax_relevant") is False:
+            return [nontax_pt]
+        if crit.get("is_tax_relevant") is True:
+            return [tax_pt]
+        return []
+
+    mock_qdrant.search_by_vector.side_effect = mock_search_by_vector
+
+    engine = VectorClassifierEngine(
+        ollama_client=mock_ollama,
+        qdrant_manager=mock_qdrant,
+        anchor_embeddings=anchor_dict,
+    )
+    result = await engine.classify(content="Handwerkerrechnung Malerarbeiten")
+
+    assert result.is_tax_relevant is True
+    assert result.tax_review_required is False
+    assert result.tax_category == "steuer:handwerker"
+    assert result.tax_confidence == 0.95
+
+
+@pytest.mark.asyncio
+async def test_classify_kontoauszug_excluded_from_tax():
+    """Verify Kontoauszug document type is automatically excluded from tax relevance."""
+    mock_ollama = AsyncMock(spec=OllamaEmbeddingClient)
+    mock_ollama.get_document_embeddings.return_value = ([0.0] * 8, [0.0] * 8)
+
+    # Let anchor predict "Kontoauszug"
+    anchor_dict = {
+        "Kontoauszug": [1.0] + [0.0] * 7,
+    }
+    # Doc type anchor for Kontoauszug matches perfectly
+    mock_qdrant = AsyncMock(spec=QdrantStorageManager)
+    # Even if Qdrant has a high tax neighbor:
+    tax_pt = ScoredPoint(
+        id="1",
+        version=1,
+        score=0.98,
+        payload={"is_tax_relevant": True, "tax_category": "steuer:anlage-v"},
+        vector=None,
+    )
+    mock_qdrant.search_by_vector.return_value = [tax_pt]
+
+    engine = VectorClassifierEngine(
+        ollama_client=mock_ollama,
+        qdrant_manager=mock_qdrant,
+        anchor_embeddings=anchor_dict,
+    )
+    # Classify with filename containing Kontoauszug
+    result = await engine.classify(
+        content="Kontoauszug Commerzbank IBAN DE50100800000860834904",
+        filename="Kontoauszug_2026_01.pdf",
+    )
+
+    assert result.is_tax_relevant is False
+    assert result.tax_review_required is False
+    assert result.tax_confidence == 0.0
+    assert result.tax_category is None
