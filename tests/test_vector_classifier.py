@@ -734,3 +734,42 @@ async def test_contrastive_knn_confident_tax_when_tax_neighbor_wins():
     assert result.tax_review_required is False
     assert result.tax_category == "steuer:handwerker"
     assert result.tax_confidence == 0.95
+
+
+@pytest.mark.asyncio
+async def test_classify_kontoauszug_excluded_from_tax():
+    """Verify Kontoauszug document type is automatically excluded from tax relevance."""
+    mock_ollama = AsyncMock(spec=OllamaEmbeddingClient)
+    mock_ollama.get_document_embeddings.return_value = ([0.0] * 8, [0.0] * 8)
+
+    # Let anchor predict "Kontoauszug"
+    anchor_dict = {
+        "Kontoauszug": [1.0] + [0.0] * 7,
+    }
+    # Doc type anchor for Kontoauszug matches perfectly
+    mock_qdrant = AsyncMock(spec=QdrantStorageManager)
+    # Even if Qdrant has a high tax neighbor:
+    tax_pt = ScoredPoint(
+        id="1",
+        version=1,
+        score=0.98,
+        payload={"is_tax_relevant": True, "tax_category": "steuer:anlage-v"},
+        vector=None,
+    )
+    mock_qdrant.search_by_vector.return_value = [tax_pt]
+
+    engine = VectorClassifierEngine(
+        ollama_client=mock_ollama,
+        qdrant_manager=mock_qdrant,
+        anchor_embeddings=anchor_dict,
+    )
+    # Classify with filename containing Kontoauszug
+    result = await engine.classify(
+        content="Kontoauszug Commerzbank IBAN DE50100800000860834904",
+        filename="Kontoauszug_2026_01.pdf",
+    )
+
+    assert result.is_tax_relevant is False
+    assert result.tax_review_required is False
+    assert result.tax_confidence == 0.0
+    assert result.tax_category is None

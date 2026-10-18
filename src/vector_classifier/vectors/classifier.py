@@ -439,13 +439,25 @@ class VectorClassifierEngine:
         pred_doc_type, doc_confidence, doc_anchors = await self._classify_doc_type(
             header_vector
         )
-        (
-            is_tax,
-            tax_conf,
-            tax_cat,
-            tax_review,
-            tax_anchors,
-        ) = await self._classify_tax_relevance(content_vector)
+
+        is_kontoauszug = (
+            pred_doc_type == "Kontoauszug" or "kontoauszug" in filename.lower()
+        )
+
+        if is_kontoauszug:
+            is_tax = False
+            tax_conf = 0.0
+            tax_cat = None
+            tax_review = False
+            tax_anchors = []
+        else:
+            (
+                is_tax,
+                tax_conf,
+                tax_cat,
+                tax_review,
+                tax_anchors,
+            ) = await self._classify_tax_relevance(content_vector)
 
         pred_tags, tag_scores, theme_anchors = await self._classify_thematic_tags(
             content_vector

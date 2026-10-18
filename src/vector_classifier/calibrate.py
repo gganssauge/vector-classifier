@@ -462,6 +462,26 @@ class TaxCalibrationRunner:
         payload = recs[0].payload or {}
         orig_tags = payload.get("tags_original", [])
 
+        # Option A: Kontoauszüge are never automatic tax candidates
+        doc_type = str(
+            payload.get("doc_type_original", "")
+            or payload.get("predicted_doc_type", "")
+        ).lower()
+        title_lower = title.lower()
+        if (
+            "kontoauszug" in doc_type
+            or "kontoauszug" in title_lower
+            or "auszug" in title_lower
+        ):
+            patch = _build_zone_3_nontax_patch(yr=yr, eid=eid)
+            await client.set_payload(
+                collection_name=manager.collection,
+                payload=patch,
+                points=[pt_id],
+                wait=False,
+            )
+            return None
+
         # Contrastive k-NN: nearest tax vs nearest non-tax
         tax_matches = await manager.search_by_vector(
             vector_name="content",
