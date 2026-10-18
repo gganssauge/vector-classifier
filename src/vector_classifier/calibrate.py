@@ -460,6 +460,9 @@ class TaxCalibrationRunner:
             return None
 
         payload = recs[0].payload or {}
+        if payload.get("is_tax_curated"):
+            return None
+
         orig_tags = payload.get("tags_original", [])
 
         # Option A: Kontoauszüge are never automatic tax candidates
