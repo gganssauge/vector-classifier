@@ -1,6 +1,7 @@
 """Unit tests for TaxReviewManager and tax review workflow."""
 
 import csv
+import json
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
@@ -79,23 +80,7 @@ async def test_tag_candidates_dry_run(tmp_path: Path):
 
     mgr = TaxReviewManager()
 
-    with respx.mock(base_url="https://paperless.gorki120.de") as respx_mock:
-        respx_mock.get("/api/tags/?page_size=500").mock(
-            return_value=Response(
-                200,
-                json={
-                    "results": [
-                        {"id": 270, "name": "Steuern-Review"},
-                        {"id": 248, "name": "Steuern-Privat"},
-                        {"id": 250, "name": "Steuern-Vermietung"},
-                    ]
-                },
-            )
-        )
-        respx_mock.get("/api/documents/101/").mock(
-            return_value=Response(200, json={"id": 101, "tags": [12]})
-        )
-
+    with respx.mock(base_url="https://paperless.gorki120.de", assert_all_called=False):
         stats = await mgr.tag_candidates(csv_path=csv_file, dry_run=True)
         assert stats["candidates"] == 1
         assert stats["updated"] == 1
@@ -134,17 +119,22 @@ async def test_tag_candidates_apply(tmp_path: Path):
                 },
             )
         )
-        respx_mock.get("/api/documents/102/").mock(
-            return_value=Response(200, json={"id": 102, "tags": []})
-        )
-        patch_route = respx_mock.patch("/api/documents/102/").mock(
-            return_value=Response(200, json={"id": 102, "tags": [270, 248]})
+        bulk_route = respx_mock.post("/api/documents/bulk_edit/").mock(
+            return_value=Response(200, json={"result": "OK"})
         )
 
         stats = await mgr.tag_candidates(csv_path=csv_file, dry_run=False)
         assert stats["candidates"] == 1
         assert stats["updated"] == 1
-        assert patch_route.called
+        assert bulk_route.called
+        assert json.loads(bulk_route.calls.last.request.content) == {
+            "documents": [102],
+            "method": "modify_tags",
+            "parameters": {
+                "add_tags": [270, 248],
+                "remove_tags": [],
+            },
+        }
 
 
 @pytest.mark.asyncio

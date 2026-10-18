@@ -150,58 +150,29 @@ class TaxReviewManager:
                 break
         return candidate_rows
 
-    async def _tag_single_candidate(
+    async def bulk_modify_tags(
         self,
-        row: dict[str, Any],
-        review_tag_id: int,
-        privat_tag_id: int | None,
-        vermietung_tag_id: int | None,
         client: httpx.AsyncClient,
-        semaphore: asyncio.Semaphore,
-        dry_run: bool,
-        out: Console,
-    ) -> str:
-        raw_pid = row.get("paperless_id")
-        if not raw_pid:
-            return "skip"
-        pid = int(raw_pid)
-        pred_cat = str(row.get("predicted_tax_category", "")).lower()
-        target_tag_id = vermietung_tag_id if "anlage-v" in pred_cat else privat_tag_id
-
-        async with semaphore:
-            try:
-                doc_resp = await client.get(
-                    f"{self.paperless_url}/api/documents/{pid}/"
-                )
-                if doc_resp.status_code != 200:
-                    out.print(
-                        f"[red]Failed to fetch doc {pid}: HTTP {doc_resp.status_code}[/red]"
-                    )
-                    return "error"
-
-                doc_data = doc_resp.json()
-                current_tags = list(doc_data.get("tags", []))
-                new_tags = list(current_tags)
-
-                if review_tag_id not in new_tags:
-                    new_tags.append(review_tag_id)
-                if target_tag_id and target_tag_id not in new_tags:
-                    new_tags.append(target_tag_id)
-
-                if set(new_tags) == set(current_tags):
-                    return "already_tagged"
-
-                if not dry_run:
-                    patch_resp = await client.patch(
-                        f"{self.paperless_url}/api/documents/{pid}/",
-                        json={"tags": new_tags},
-                    )
-                    patch_resp.raise_for_status()
-
-                return "updated"
-            except Exception as exc:
-                out.print(f"[red]Error tagging doc {pid}: {exc}[/red]")
-                return "error"
+        doc_ids: list[int],
+        add_tags: list[int],
+        remove_tags: list[int] | None = None,
+    ) -> None:
+        """Modify tags for multiple documents in a single Paperless bulk_edit API call."""
+        if not doc_ids:
+            return
+        payload = {
+            "documents": doc_ids,
+            "method": "modify_tags",
+            "parameters": {
+                "add_tags": add_tags,
+                "remove_tags": remove_tags or [],
+            },
+        }
+        resp = await client.post(
+            f"{self.paperless_url}/api/documents/bulk_edit/",
+            json=payload,
+        )
+        resp.raise_for_status()
 
     async def tag_candidates(
         self,
@@ -209,13 +180,43 @@ class TaxReviewManager:
         dry_run: bool = False,
         console: Console | None = None,
     ) -> dict[str, int]:
-        """Tag all candidate documents in Paperless with Steuern-Review and proposed category tag."""
+        """Tag all candidate documents in Paperless with Steuern-Review and proposed category tag using Bulk API."""
         out = console or Console()
         stats = {"candidates": 0, "updated": 0, "already_tagged": 0, "errors": 0}
 
         candidate_rows = await self._load_candidate_rows(csv_path)
         stats["candidates"] = len(candidate_rows)
         out.print(f"Found {len(candidate_rows)} tax candidates to tag.")
+
+        if not candidate_rows:
+            return stats
+
+        privat_doc_ids: list[int] = []
+        vermietung_doc_ids: list[int] = []
+
+        for row in candidate_rows:
+            raw_pid = row.get("paperless_id")
+            if not raw_pid:
+                continue
+            try:
+                pid = int(raw_pid)
+            except ValueError:
+                continue
+
+            pred_cat = str(row.get("predicted_tax_category", "")).lower()
+            if "anlage-v" in pred_cat:
+                vermietung_doc_ids.append(pid)
+            else:
+                privat_doc_ids.append(pid)
+
+        total_to_update = len(privat_doc_ids) + len(vermietung_doc_ids)
+
+        if dry_run:
+            out.print(
+                f"[yellow][DRY RUN] Would bulk tag {len(vermietung_doc_ids)} Vermietung docs and {len(privat_doc_ids)} Privat docs.[/yellow]"
+            )
+            stats["updated"] = total_to_update
+            return stats
 
         async with httpx.AsyncClient(
             headers=self._get_headers(),
@@ -229,27 +230,27 @@ class TaxReviewManager:
             privat_tag_id = tag_map.get("Steuern-Privat")
             vermietung_tag_id = tag_map.get("Steuern-Vermietung")
 
-            semaphore = asyncio.Semaphore(4)
+            try:
+                if vermietung_doc_ids:
+                    add_tags = [
+                        t for t in (review_tag_id, vermietung_tag_id) if t is not None
+                    ]
+                    await self.bulk_modify_tags(
+                        client, vermietung_doc_ids, add_tags=add_tags
+                    )
 
-            tasks = [
-                self._tag_single_candidate(
-                    row=r,
-                    review_tag_id=review_tag_id,
-                    privat_tag_id=privat_tag_id,
-                    vermietung_tag_id=vermietung_tag_id,
-                    client=client,
-                    semaphore=semaphore,
-                    dry_run=dry_run,
-                    out=out,
-                )
-                for r in candidate_rows
-            ]
-            results = await asyncio.gather(*tasks)
-            for res in results:
-                if res in stats:
-                    stats[res] += 1
-                elif res == "error":
-                    stats["errors"] += 1
+                if privat_doc_ids:
+                    add_tags = [
+                        t for t in (review_tag_id, privat_tag_id) if t is not None
+                    ]
+                    await self.bulk_modify_tags(
+                        client, privat_doc_ids, add_tags=add_tags
+                    )
+
+                stats["updated"] = total_to_update
+            except Exception as exc:
+                out.print(f"[red]Error in bulk tagging candidates: {exc}[/red]")
+                stats["errors"] = 1
 
         return stats
 
