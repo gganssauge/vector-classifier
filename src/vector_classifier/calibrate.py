@@ -406,20 +406,7 @@ class TaxCalibrationRunner:
 
         manager = self.qdrant
         client = manager.client
-
-        all_points: list[Any] = []
-        next_page = None
-        while True:
-            records, next_page = await client.scroll(
-                collection_name=manager.collection,
-                limit=1000,
-                with_payload=True,
-                with_vectors=False,
-                offset=next_page,
-            )
-            all_points.extend(records)
-            if next_page is None:
-                break
+        all_points = await _scroll_all_points(client, manager.collection)
 
         stats = {
             "curated_2020_2025": 0,
@@ -430,42 +417,13 @@ class TaxCalibrationRunner:
             "post_2025_tax_candidates": 0,
         }
 
-        updates: list[tuple[Any, dict[str, Any]]] = []
-        post_2025_points: list[tuple[Any, Any, str, int | None, int | None]] = []
-
-        for r in all_points:
-            p = r.payload or {}
-            pid = p.get("paperless_id")
-            meta = paperless_meta.get(pid, {})
-            year = meta.get("year")
-            eid = meta.get("ecodms_id") or extract_ecodms_id(p)
-            tags_orig = [str(t).lower() for t in p.get("tags_original", [])]
-            has_paperless_tax_tag = any("steuer" in t for t in tags_orig)
-
-            if year is not None and 2020 <= year <= 2025:
-                patch = _build_zone_1_patch(
-                    eid=eid,
-                    year=year,
-                    privat_ids=privat_ids,
-                    vermietung_ids=vermietung_ids,
-                    orig_cat=p.get("tax_category"),
-                    stats=stats,
-                )
-                updates.append((r.id, patch))
-            elif year is not None and year < 2020:
-                patch = _build_zone_2_patch(
-                    eid=eid,
-                    year=year,
-                    has_paperless_tax_tag=has_paperless_tax_tag,
-                    tags_orig=tags_orig,
-                    stats=stats,
-                )
-                updates.append((r.id, patch))
-            else:
-                stats["post_2025_total"] += 1
-                post_2025_points.append(
-                    (r.id, pid, meta.get("title", p.get("title", "")), year, eid)
-                )
+        updates, post_2025_points = _partition_points(
+            all_points=all_points,
+            paperless_meta=paperless_meta,
+            privat_ids=privat_ids,
+            vermietung_ids=vermietung_ids,
+            stats=stats,
+        )
 
         # Apply Zone 1 & 2 updates to Qdrant
         for i in range(0, len(updates), 100):
@@ -483,7 +441,7 @@ class TaxCalibrationRunner:
         async with httpx.AsyncClient(
             headers=headers,
             timeout=settings.paperless_timeout,
-            verify=settings.paperless_ssl_verify,  # NOSONAR
+            verify=settings.paperless_ssl_verify,
         ) as http_client:
             for pt_id, pid, title, yr, eid in post_2025_points:
                 candidate = await self._evaluate_zone_3_candidate(
