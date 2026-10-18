@@ -291,11 +291,11 @@ class TaxReviewManager:
         dry_run: bool,
     ) -> None:
         patch = {
-            "is_tax_curated": False,
+            "is_tax_curated": True,
             "is_tax_relevant": False,
             "tax_review_required": False,
             "tax_confidence": 0.0,
-            "tax_source": None,
+            "tax_source": "confirmed_nontax",
             "tax_category": None,
         }
         if not dry_run:

@@ -15,7 +15,6 @@ from vector_classifier.vectors.classifier import (
     VectorClassifierEngine,
     cosine_similarity,
     extract_header_content,
-    is_tax_disqualified,
 )
 from vector_classifier.vectors.client import OllamaEmbeddingClient
 from vector_classifier.vectors.qdrant import QdrantStorageError, QdrantStorageManager
@@ -513,9 +512,16 @@ async def test_knn_tax_weighted_score_and_cluster_selection():
     )
 
     mock_qdrant = AsyncMock(spec=QdrantStorageManager)
-    mock_qdrant.search_by_vector.side_effect = lambda vector_name, **kwargs: (
-        [p1, p2, p3] if kwargs.get("filter_criteria") else []
-    )
+
+    def mock_search(vector_name, **kwargs):
+        crit = kwargs.get("filter_criteria", {})
+        if crit.get("is_tax_relevant") is False:
+            return []
+        if crit.get("is_tax_relevant") is True or crit.get("is_tax_curated") is True:
+            return [p1, p2, p3]
+        return []
+
+    mock_qdrant.search_by_vector.side_effect = mock_search
 
     engine = VectorClassifierEngine(
         ollama_client=mock_ollama,
@@ -584,96 +590,147 @@ async def test_knn_canonical_macro_tag_mapping():
 
 
 # ---------------------------------------------------------------------------
-# Tax Disqualification Tests
+# Contrastive Tax k-NN Tests
 # ---------------------------------------------------------------------------
-def test_is_tax_disqualified():
-    """Verify negative tax disclaimer detection and exceptions."""
-    disclaimer_text = (
-        "Informationen zur steuerlichen Behandlung dieses Geschäftsvorgangs "
-        "und den auf Ihrem Konto gebuchten Endbetrag finden Sie auf der "
-        "separaten Steuermitteilung."
-    )
-    # Generic document containing the disclaimer -> disqualified
-    assert is_tax_disqualified(disclaimer_text, filename="Abrechnung_123.pdf") is True
-    assert (
-        is_tax_disqualified(
-            "Hinweis: siehe separate Steuermitteilung", filename="Fondskauf.pdf"
-        )
-        is True
-    )
-
-    # Variant with singular 'Information', 'Geschäftsvorganges' and linebreaks
-    variant_text = (
-        "Information zur steuerlichen Behandlung dieses Geschäftsvorganges und den auf\n"
-        "Ihrem Konto gebuchten Endbetrag finden Sie auf der separaten Steuermitteilung\n"
-        "(Referenz-Nr. 5280MPBKDNZ000B7)."
-    )
-    assert (
-        is_tax_disqualified(variant_text, filename="Dividendengutschrift.pdf") is True
-    )
-
-    # Line break inside the pattern itself
-    linebreak_text = "Details finden Sie auf der separaten\nSteuermitteilung."
-    assert is_tax_disqualified(linebreak_text, filename="Abrechnung.pdf") is True
-
-    # Document whose title indicates it IS the Steuermitteilung -> NOT disqualified
-    assert (
-        is_tax_disqualified(
-            disclaimer_text, filename="Steuermitteilung_hausInvest_2025.pdf"
-        )
-        is False
-    )
-    assert (
-        is_tax_disqualified(
-            disclaimer_text, filename="Jahres_Steuerbescheinigung_2025.pdf"
-        )
-        is False
-    )
-
-    # Normal tax invoice without disclaimer -> NOT disqualified
-    assert (
-        is_tax_disqualified(
-            "Handwerkerrechnung Malerarbeiten § 35a EStG", filename="Rechnung.pdf"
-        )
-        is False
-    )
-
-
 @pytest.mark.asyncio
-async def test_classify_disqualified_transaction_doc():
-    """Verify classify drops tax relevance when disclaimer is present."""
+async def test_contrastive_knn_excludes_when_nontax_neighbor_wins():
+    """Verify document is excluded when non-tax neighbor clearly beats tax score (>= +0.03)."""
     mock_ollama = AsyncMock(spec=OllamaEmbeddingClient)
     mock_ollama.get_document_embeddings.return_value = ([0.0] * 8, [0.0] * 8)
 
     anchor_dict = {a.name: [0.0] * 8 for a in get_tax_anchors()}
 
-    # Even if Qdrant k-NN returns a strong tax match:
-    p1 = ScoredPoint(
+    tax_pt = ScoredPoint(
         id="1",
         version=1,
-        score=0.95,
+        score=0.86,
         payload={"is_tax_relevant": True, "tax_category": "steuer:werbungskosten"},
         vector=None,
     )
+    nontax_pt = ScoredPoint(
+        id="2",
+        version=1,
+        score=0.96,
+        payload={"is_tax_relevant": False},
+        vector=None,
+    )
+
     mock_qdrant = AsyncMock(spec=QdrantStorageManager)
-    mock_qdrant.search_by_vector.return_value = [p1]
+
+    def mock_search_by_vector(vector_name, **kwargs):
+        crit = kwargs.get("filter_criteria", {})
+        if crit.get("is_tax_relevant") is False:
+            return [nontax_pt]
+        if crit.get("is_tax_relevant") is True:
+            return [tax_pt]
+        return []
+
+    mock_qdrant.search_by_vector.side_effect = mock_search_by_vector
 
     engine = VectorClassifierEngine(
         ollama_client=mock_ollama,
         qdrant_manager=mock_qdrant,
         anchor_embeddings=anchor_dict,
     )
-    disclaimer_doc = (
-        "Wertpapier Abrechnung Kauf Fondanteile. "
-        "Informationen zur steuerlichen Behandlung dieses Geschäftsvorgangs "
-        "finden Sie auf der separaten Steuermitteilung."
-    )
-    result = await engine.classify(
-        content=disclaimer_doc,
-        filename="Abrechnung_Fonds.pdf",
-    )
+    result = await engine.classify(content="Wertpapierabrechnung Kauf Aktien")
 
+    # 0.96 (NonTax) >= 0.86 (Tax) + 0.03 -> Excluded
     assert result.is_tax_relevant is False
     assert result.tax_review_required is False
-    assert result.tax_confidence == 0.0
     assert result.tax_category is None
+
+
+@pytest.mark.asyncio
+async def test_contrastive_knn_marks_review_on_close_boundary():
+    """Verify document is marked for review when tax score is high and close to non-tax score."""
+    mock_ollama = AsyncMock(spec=OllamaEmbeddingClient)
+    mock_ollama.get_document_embeddings.return_value = ([0.0] * 8, [0.0] * 8)
+
+    anchor_dict = {a.name: [0.0] * 8 for a in get_tax_anchors()}
+
+    tax_pt = ScoredPoint(
+        id="1",
+        version=1,
+        score=0.88,
+        payload={"is_tax_relevant": True, "tax_category": "steuer:werbungskosten"},
+        vector=None,
+    )
+    nontax_pt = ScoredPoint(
+        id="2",
+        version=1,
+        score=0.89,
+        payload={"is_tax_relevant": False},
+        vector=None,
+    )
+
+    mock_qdrant = AsyncMock(spec=QdrantStorageManager)
+
+    def mock_search_by_vector(vector_name, **kwargs):
+        crit = kwargs.get("filter_criteria", {})
+        if crit.get("is_tax_relevant") is False:
+            return [nontax_pt]
+        if crit.get("is_tax_relevant") is True:
+            return [tax_pt]
+        return []
+
+    mock_qdrant.search_by_vector.side_effect = mock_search_by_vector
+
+    engine = VectorClassifierEngine(
+        ollama_client=mock_ollama,
+        qdrant_manager=mock_qdrant,
+        anchor_embeddings=anchor_dict,
+    )
+    result = await engine.classify(content="Grenzfall Dokument")
+
+    # NonTax (0.89) - Tax (0.88) = 0.01 < 0.03 -> Boundary case queued for review
+    assert result.is_tax_relevant is True
+    assert result.tax_review_required is True
+    assert result.tax_category == "steuer:werbungskosten"
+
+
+@pytest.mark.asyncio
+async def test_contrastive_knn_confident_tax_when_tax_neighbor_wins():
+    """Verify document is confident tax when tax neighbor clearly beats non-tax neighbor."""
+    mock_ollama = AsyncMock(spec=OllamaEmbeddingClient)
+    mock_ollama.get_document_embeddings.return_value = ([0.0] * 8, [0.0] * 8)
+
+    anchor_dict = {a.name: [0.0] * 8 for a in get_tax_anchors()}
+
+    tax_pt = ScoredPoint(
+        id="1",
+        version=1,
+        score=0.95,
+        payload={"is_tax_relevant": True, "tax_category": "steuer:handwerker"},
+        vector=None,
+    )
+    nontax_pt = ScoredPoint(
+        id="2",
+        version=1,
+        score=0.65,
+        payload={"is_tax_relevant": False},
+        vector=None,
+    )
+
+    mock_qdrant = AsyncMock(spec=QdrantStorageManager)
+
+    def mock_search_by_vector(vector_name, **kwargs):
+        crit = kwargs.get("filter_criteria", {})
+        if crit.get("is_tax_relevant") is False:
+            return [nontax_pt]
+        if crit.get("is_tax_relevant") is True:
+            return [tax_pt]
+        return []
+
+    mock_qdrant.search_by_vector.side_effect = mock_search_by_vector
+
+    engine = VectorClassifierEngine(
+        ollama_client=mock_ollama,
+        qdrant_manager=mock_qdrant,
+        anchor_embeddings=anchor_dict,
+    )
+    result = await engine.classify(content="Handwerkerrechnung Malerarbeiten")
+
+    assert result.is_tax_relevant is True
+    assert result.tax_review_required is False
+    assert result.tax_category == "steuer:handwerker"
+    assert result.tax_confidence == 0.95

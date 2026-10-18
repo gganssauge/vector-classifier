@@ -99,31 +99,6 @@ def _extract_neighbor_canonical_tags(neighbor: Any) -> set[str]:
     return canonical_tags
 
 
-TAX_DISQUALIFYING_PATTERNS = (
-    "separaten steuermitteilung",
-    "separate steuermitteilung",
-    "separater steuermitteilung",
-    "auf der separaten steuermitteilung",
-    "separaten steuerbescheinigung",
-    "separate steuerbescheinigung",
-    "separater steuerbescheinigung",
-    "auf der separaten steuerbescheinigung",
-    "information zur steuerlichen behandlung",
-    "informationen zur steuerlichen behandlung",
-    "finden sie auf der separaten",
-)
-
-
-def is_tax_disqualified(content: str, filename: str = "") -> bool:
-    """Check if document explicitly defers tax data to a separate document."""
-    fn_lower = filename.lower()
-    if "steuermitteilung" in fn_lower or "steuerbescheinigung" in fn_lower:
-        return False
-    # Normalize whitespace to reliably match patterns across line breaks or extra spaces
-    text_norm = " ".join(content.lower().split())
-    return any(p in text_norm for p in TAX_DISQUALIFYING_PATTERNS)
-
-
 _DEFAULT: Any = object()
 
 
@@ -239,13 +214,8 @@ class VectorClassifierEngine:
     async def _classify_tax_relevance(
         self,
         content_vector: list[float],
-        content_text: str = "",
-        filename: str = "",
     ) -> tuple[bool, float, str | None, bool, list[dict[str, Any]]]:
-        """Classify hybrid tax relevance using semantic anchors and Qdrant k-NN search."""
-        if is_tax_disqualified(content_text, filename):
-            return False, 0.0, None, False, []
-
+        """Classify contrastive tax relevance using semantic anchors and Qdrant k-NN search."""
         tax_anchors = get_tax_anchors()
 
         tax_scores: list[tuple[SemanticAnchor, float]] = []
@@ -260,11 +230,22 @@ class VectorClassifierEngine:
         best_category: str | None = best_tax_anchor.name
 
         knn_tax_score, knn_category = await self._query_tax_knn(content_vector)
+        knn_nontax_score = await self._query_nontax_knn(content_vector)
+
         tax_confidence = round(max(anchor_tax_score, knn_tax_score), 4)
         if knn_tax_score > anchor_tax_score and knn_category:
             best_category = knn_category
 
-        if tax_confidence >= settings.threshold_tax_confident:
+        # Contrastive evaluation against non-tax neighbor:
+        # If the non-tax neighbor clearly beats the tax score (margin >= 0.03):
+        if knn_nontax_score >= tax_confidence + 0.03:
+            is_tax_relevant = False
+            tax_review_required = False
+            tax_category = None
+        elif (
+            tax_confidence >= settings.threshold_tax_confident
+            and tax_confidence >= knn_nontax_score
+        ):
             is_tax_relevant = True
             tax_review_required = False
             tax_category = best_category
@@ -283,6 +264,7 @@ class VectorClassifierEngine:
                 "category": "tax",
                 "similarity": anchor_tax_score,
                 "knn_tax_score": knn_tax_score,
+                "knn_nontax_score": knn_nontax_score,
             }
         ]
         return (
@@ -292,6 +274,42 @@ class VectorClassifierEngine:
             tax_review_required,
             matched_anchors,
         )
+
+    async def _query_nontax_knn(self, content_vector: list[float]) -> float:
+        """Query Qdrant for top non-tax neighbor score."""
+        if self.qdrant_manager is None:
+            return 0.0
+        try:
+            nontax_neighbors = await self.qdrant_manager.search_by_vector(
+                vector_name="content",
+                vector=content_vector,
+                limit=1,
+                filter_criteria={"is_tax_relevant": False},
+            )
+            if not nontax_neighbors:
+                return 0.0
+            return max(0.0, float(getattr(nontax_neighbors[0], "score", 0.0)))
+        except Exception as exc:
+            logger.warning("k-NN non-tax vector search failed: %s", exc)
+        return 0.0
+
+    async def _query_nontax_knn(self, content_vector: list[float]) -> float:
+        """Query Qdrant for top non-tax neighbor score."""
+        if self.qdrant_manager is None:
+            return 0.0
+        try:
+            nontax_neighbors = await self.qdrant_manager.search_by_vector(
+                vector_name="content",
+                vector=content_vector,
+                limit=1,
+                filter_criteria={"is_tax_relevant": False},
+            )
+            if not nontax_neighbors:
+                return 0.0
+            return max(0.0, float(getattr(nontax_neighbors[0], "score", 0.0)))
+        except Exception as exc:
+            logger.warning("k-NN non-tax vector search failed: %s", exc)
+        return 0.0
 
     async def _query_tax_knn(
         self, content_vector: list[float]
@@ -304,7 +322,7 @@ class VectorClassifierEngine:
                 vector_name="content",
                 vector=content_vector,
                 limit=5,
-                filter_criteria={"is_tax_curated": True},
+                filter_criteria={"is_tax_curated": True, "is_tax_relevant": True},
             )
             if not tax_neighbors:
                 return 0.0, None
@@ -427,11 +445,7 @@ class VectorClassifierEngine:
             tax_cat,
             tax_review,
             tax_anchors,
-        ) = await self._classify_tax_relevance(
-            content_vector,
-            content_text=content,
-            filename=filename,
-        )
+        ) = await self._classify_tax_relevance(content_vector)
 
         pred_tags, tag_scores, theme_anchors = await self._classify_thematic_tags(
             content_vector

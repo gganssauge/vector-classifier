@@ -18,7 +18,6 @@ from vector_classifier.tax_review import (
     DEFAULT_VERMIETUNG_FILE,
     extract_ecodms_id,
 )
-from vector_classifier.vectors.classifier import is_tax_disqualified
 from vector_classifier.vectors.qdrant import QdrantStorageManager
 
 logger = logging.getLogger(__name__)
@@ -188,6 +187,8 @@ def _write_candidates_csv(csv_path: Path, rows: list[dict[str, Any]]) -> None:
                 "title",
                 "predicted_tax_category",
                 "confidence",
+                "nontax_confidence",
+                "review_reason",
                 "matched_anchor_document",
                 "current_paperless_tags",
             ],
@@ -204,6 +205,8 @@ def _build_zone_3_match(
     title: str,
     orig_tags: list[str],
     stats: dict[str, int],
+    review_reason: str = "",
+    nontax_score: float = 0.0,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     score = round(float(best.score), 4)
     cat = best.payload.get("tax_category", DEFAULT_TAX_CATEGORY)
@@ -218,6 +221,8 @@ def _build_zone_3_match(
         "tax_source": "knn_candidate",
         "tax_category": cat,
         "tax_confidence": score,
+        "tax_nontax_confidence": nontax_score,
+        "tax_review_reason": review_reason,
         "matched_curated_doc": matched_anchor_title,
     }
     candidate_record = {
@@ -226,6 +231,8 @@ def _build_zone_3_match(
         "title": title,
         "predicted_tax_category": cat,
         "confidence": score,
+        "nontax_confidence": nontax_score,
+        "review_reason": review_reason,
         "matched_anchor_document": matched_anchor_title,
         "current_paperless_tags": ", ".join(orig_tags),
     }
@@ -243,29 +250,6 @@ def _build_zone_3_nontax_patch(yr: int | None, eid: int | None) -> dict[str, Any
         "tax_category": None,
         "tax_confidence": 0.0,
     }
-
-
-async def _is_candidate_disqualified(
-    http_client: httpx.AsyncClient | None,
-    pid: int | None,
-    title: str,
-) -> bool:
-    """Check if document is disqualified based on title or tax disclaimer in content."""
-    if is_tax_disqualified("", title):
-        return True
-    if http_client is not None and pid is not None:
-        try:
-            doc_resp = await http_client.get(
-                f"{settings.paperless_base_url}/api/documents/{pid}/"
-            )
-            if doc_resp.status_code == 200:
-                content_text = doc_resp.json().get("content", "")
-                return is_tax_disqualified(content_text, title)
-        except Exception as exc:
-            logger.debug(
-                "Failed to fetch doc content for tax disqualification check: %s", exc
-            )
-    return False
 
 
 async def _scroll_all_points(client: Any, collection: str) -> list[Any]:
@@ -435,26 +419,19 @@ class TaxCalibrationRunner:
                     wait=False,
                 )
 
-        # Zone 3: Evaluate 2026+ via k-NN against curated anchors
+        # Zone 3: Evaluate 2026+ via contrastive k-NN against curated anchors & nontax
         candidates_for_review: list[dict[str, Any]] = []
-        headers = {"Authorization": f"Token {settings.paperless_api_token}"}
-        async with httpx.AsyncClient(
-            headers=headers,
-            timeout=settings.paperless_timeout,
-            verify=settings.paperless_ssl_verify,
-        ) as http_client:
-            for pt_id, pid, title, yr, eid in post_2025_points:
-                candidate = await self._evaluate_zone_3_candidate(
-                    pt_id=pt_id,
-                    pid=pid,
-                    title=title,
-                    yr=yr,
-                    eid=eid,
-                    stats=stats,
-                    http_client=http_client,
-                )
-                if candidate is not None:
-                    candidates_for_review.append(candidate)
+        for pt_id, pid, title, yr, eid in post_2025_points:
+            candidate = await self._evaluate_zone_3_candidate(
+                pt_id=pt_id,
+                pid=pid,
+                title=title,
+                yr=yr,
+                eid=eid,
+                stats=stats,
+            )
+            if candidate is not None:
+                candidates_for_review.append(candidate)
 
         await asyncio.to_thread(
             _write_candidates_csv, self.candidates_csv, candidates_for_review
@@ -469,7 +446,6 @@ class TaxCalibrationRunner:
         yr: int | None,
         eid: int | None,
         stats: dict[str, int],
-        http_client: httpx.AsyncClient | None = None,
     ) -> dict[str, Any] | None:
         manager = self.qdrant
         client = manager.client
@@ -486,28 +462,57 @@ class TaxCalibrationRunner:
         payload = recs[0].payload or {}
         orig_tags = payload.get("tags_original", [])
 
+        # Contrastive k-NN: nearest tax vs nearest non-tax
         tax_matches = await manager.search_by_vector(
             vector_name="content",
             vector=vec,
             limit=1,
-            score_threshold=self.threshold_knn,
-            filter_criteria={"is_tax_curated": True},
+            score_threshold=0.70,
+            filter_criteria={"is_tax_curated": True, "is_tax_relevant": True},
+        )
+        tax_score = round(float(tax_matches[0].score), 4) if tax_matches else 0.0
+
+        nontax_matches = await manager.search_by_vector(
+            vector_name="content",
+            vector=vec,
+            limit=1,
+            score_threshold=0.70,
+            filter_criteria={"is_tax_relevant": False},
+        )
+        nontax_matches = [m for m in nontax_matches if getattr(m, "id", None) != pt_id]
+        nontax_score = (
+            round(float(nontax_matches[0].score), 4) if nontax_matches else 0.0
         )
 
-        if tax_matches:
-            if await _is_candidate_disqualified(http_client, pid, title):
-                patch = _build_zone_3_nontax_patch(yr=yr, eid=eid)
-                candidate_record = None
-            else:
-                patch, candidate_record = _build_zone_3_match(
-                    best=tax_matches[0],
-                    yr=yr,
-                    eid=eid,
-                    pid=pid,
-                    title=title,
-                    orig_tags=orig_tags,
-                    stats=stats,
-                )
+        diff = nontax_score - tax_score
+        if tax_score >= self.threshold_knn and tax_score >= nontax_score:
+            reason = (
+                f"Kandidat Steuer (Tax: {tax_score:.3f} >= NonTax: {nontax_score:.3f})"
+            )
+            patch, candidate_record = _build_zone_3_match(
+                best=tax_matches[0],
+                yr=yr,
+                eid=eid,
+                pid=pid,
+                title=title,
+                orig_tags=orig_tags,
+                stats=stats,
+                review_reason=reason,
+                nontax_score=nontax_score,
+            )
+        elif tax_score >= 0.80 and 0 <= diff < 0.03:
+            reason = f"Zweifelsfall (Tax: {tax_score:.3f} vs. NonTax: {nontax_score:.3f}, Diff: +{diff:.3f})"
+            patch, candidate_record = _build_zone_3_match(
+                best=tax_matches[0],
+                yr=yr,
+                eid=eid,
+                pid=pid,
+                title=title,
+                orig_tags=orig_tags,
+                stats=stats,
+                review_reason=reason,
+                nontax_score=nontax_score,
+            )
         else:
             patch = _build_zone_3_nontax_patch(yr=yr, eid=eid)
             candidate_record = None

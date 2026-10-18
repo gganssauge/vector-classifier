@@ -231,3 +231,15 @@ async def test_sync_curated_workflow(tmp_path: Path):
 
         # Verify Qdrant payload was updated for confirmed & rejected
         assert mock_qdrant.client.set_payload.call_count == 2
+        rejected_patch = mock_qdrant.client.set_payload.call_args_list[1].kwargs[
+            "payload"
+        ]
+        assert rejected_patch["is_tax_curated"] is True
+        assert rejected_patch["is_tax_relevant"] is False
+        assert rejected_patch["tax_source"] == "confirmed_nontax"
+        rejected_patch = mock_qdrant.client.set_payload.call_args_list[1].kwargs[
+            "payload"
+        ]
+        assert rejected_patch["is_tax_curated"] is True
+        assert rejected_patch["is_tax_relevant"] is False
+        assert rejected_patch["tax_source"] == "confirmed_nontax"
