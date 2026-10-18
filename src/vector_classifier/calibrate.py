@@ -486,16 +486,17 @@ class TaxCalibrationRunner:
         tax_matches = await manager.search_by_vector(
             vector_name="content",
             vector=vec,
-            limit=1,
+            limit=5,
             score_threshold=0.70,
             filter_criteria={"is_tax_curated": True, "is_tax_relevant": True},
         )
+        tax_matches = [m for m in tax_matches if getattr(m, "id", None) != pt_id]
         tax_score = round(float(tax_matches[0].score), 4) if tax_matches else 0.0
 
         nontax_matches = await manager.search_by_vector(
             vector_name="content",
             vector=vec,
-            limit=1,
+            limit=5,
             score_threshold=0.70,
             filter_criteria={"is_tax_relevant": False},
         )
