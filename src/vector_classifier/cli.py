@@ -333,5 +333,36 @@ def sync_curated(
     asyncio.run(_execute())
 
 
+@app.command()
+def apply_batch(
+    dry_run: bool = typer.Option(
+        True,
+        DRY_RUN_OPTION,
+        help="Dry run mode without modifying Paperless documents",
+    ),
+    limit: int | None = typer.Option(
+        None,
+        "--limit",
+        "-l",
+        help="Limit number of documents to process",
+    ),
+) -> None:
+    """Run full-corpus batch qualification and application in Paperless."""
+    import asyncio
+
+    from vector_classifier.batch_apply import BatchApplyRunner
+
+    runner = BatchApplyRunner()
+
+    async def _execute() -> None:
+        try:
+            await runner.run(dry_run=dry_run, limit=limit, console=console)
+        finally:
+            await runner.qdrant.close()
+            await runner.engine.close()
+
+    asyncio.run(_execute())
+
+
 if __name__ == "__main__":
     app()
