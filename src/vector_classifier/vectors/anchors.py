@@ -40,7 +40,7 @@ DOCUMENT_TYPE_ANCHORS: list[SemanticAnchor] = [
             "monatliche Lohn- und Gehaltsabrechnungen, Entgeltnachweise der Arbeitgeber, jährliche Hausgeld- und "
             "Nebenkostenabrechnungen der Hausverwaltung oder des Vermieters (mit Verteilerschlüssel, Vorauszahlungsabgleich "
             "und Umlageberechnung), Reisekostenabrechnungen, Kreditkartenabrechnungen (Mastercard, Visa) sowie "
-            "Bankabrechnungen über Wertpapiere: Wertpapierabrechnung, Wertpapierverkauf, Wertpapierkauf, Orderabrechnung, "
+            "Bankabrechnungen über Wertpapiere: Wertpapierabrechnung, Wertpapierverkauf, Wertpapierkauf, steuerliche Behandlung von Wertpapierkäufen und Wertpapierverkäufen, Orderabrechnung, "
             "Depotübersicht, Ertragsabrechnung, Ertragsgutschrift, Dividendengutschrift, Zinsabrechnung oder Steuermitteilung der Bank. "
             "Keine reinen Girokontoauszüge und keine Versorgerrechnungen."
         ),
@@ -58,6 +58,10 @@ DOCUMENT_TYPE_ANCHORS: list[SemanticAnchor] = [
             "wertpapierabrechnung",
             "wertpapierverkauf",
             "wertpapierkauf",
+            "steuerliche behandlung",
+            "kapitalertragsteuer",
+            "solidaritaetszuschlag",
+            "steuerbemessungsgrundlage",
             "ertragsabrechnung",
             "ertragsgutschrift",
             "dividendengutschrift",
@@ -74,7 +78,7 @@ DOCUMENT_TYPE_ANCHORS: list[SemanticAnchor] = [
             "Fortlaufende periodische Finanzübersichten und Saldennachweise eines Girokontos, Tagesgeldkontos "
             "sowie eines Hausabrechnungs- oder WEG-Abrechnungskontos einer Eigentümergemeinschaft mit Auszugsnummer, "
             "Buchungstag, Wertstellung, Buchungstext, Kontostand, Umsätzen, Anfangssaldo und Schlusssaldo sowie IBAN. "
-            "Keine Wertpapierabrechnungen und keine reinen Bankmitteilungen."
+            "Keine Wertpapierabrechnungen, keine steuerlichen Abrechnungen von Wertpapierkäufen und keine reinen Bankmitteilungen."
         ),
         keywords=[
             "kontoauszug",
