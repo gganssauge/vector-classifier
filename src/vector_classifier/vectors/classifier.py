@@ -173,10 +173,82 @@ class VectorClassifierEngine:
         if self.qdrant_manager is not None:
             await self.qdrant_manager.close()
 
+    async def _check_multipage_contract(
+        self,
+        content_vector: list[float] | None,
+        top_anchor: SemanticAnchor,
+        top_score: float,
+        doc_type_anchors: list[SemanticAnchor],
+    ) -> tuple[SemanticAnchor, float]:
+        """Check whether document is a contract accompanied by a cover letter."""
+        if top_anchor.name != "Korrespondenz" or content_vector is None:
+            return top_anchor, top_score
+
+        vertrag_anchor = next(
+            (a for a in doc_type_anchors if a.name == "Vertrag"), None
+        )
+        if vertrag_anchor is None:
+            return top_anchor, top_score
+
+        vertrag_vec = await self._get_or_compute_anchor_embedding(vertrag_anchor)
+        vertrag_content_sim = cosine_similarity(content_vector, vertrag_vec)
+        korr_anchor = next(
+            (a for a in doc_type_anchors if a.name == "Korrespondenz"), None
+        )
+        korr_vec = (
+            await self._get_or_compute_anchor_embedding(korr_anchor)
+            if korr_anchor
+            else None
+        )
+        korr_content_sim = (
+            cosine_similarity(content_vector, korr_vec) if korr_vec else 0.0
+        )
+        if vertrag_content_sim >= 0.50 and vertrag_content_sim >= korr_content_sim:
+            return vertrag_anchor, round(vertrag_content_sim, 4)
+
+        return top_anchor, top_score
+
+    async def _find_knn_doctype(
+        self,
+        header_vector: list[float],
+        exclude_point_id: str | None = None,
+    ) -> tuple[str | None, float]:
+        """Find matching document type from curated nearest neighbors."""
+        if self.qdrant_manager is None:
+            return None, 0.0
+
+        try:
+            neighbors = await self.qdrant_manager.search_by_vector(
+                vector_name="header",
+                vector=header_vector,
+                limit=5,
+                filter_criteria={"is_doctype_curated": True},
+            )
+            for n in neighbors:
+                score = float(getattr(n, "score", 0.0))
+                n_id = getattr(n, "id", None)
+                if (
+                    exclude_point_id and str(n_id) == str(exclude_point_id)
+                ) or score >= 0.9999:
+                    continue
+                if score >= 0.85:
+                    payload = getattr(n, "payload", {}) or {}
+                    dt = payload.get("doctype_curated") or payload.get(
+                        "doc_type_original"
+                    )
+                    return dt, round(score, 4)
+        except Exception as exc:
+            logger.debug("k-NN doctype template match skipped: %s", exc)
+
+        return None, 0.0
+
     async def _classify_doc_type(
-        self, header_vector: list[float]
+        self,
+        header_vector: list[float],
+        content_vector: list[float] | None = None,
+        exclude_point_id: str | None = None,
     ) -> tuple[str | None, float, list[dict[str, Any]]]:
-        """Classify document type using header vector against semantic anchors."""
+        """Classify document type using header vector, multi-page content, and template k-NN."""
         doc_type_anchors = get_document_type_anchors()
         doc_type_scores: list[tuple[SemanticAnchor, float]] = []
         for anchor in doc_type_anchors:
@@ -194,19 +266,37 @@ class VectorClassifierEngine:
             round(doc_type_scores[1][1], 4) if len(doc_type_scores) > 1 else None
         )
 
-        is_confident = top_score >= settings.threshold_doctype_confident
-        is_ambiguous = (
-            (top_score - second_score < 0.05) if second_score is not None else False
+        top_anchor, top_score = await self._check_multipage_contract(
+            content_vector, top_anchor, top_score, doc_type_anchors
         )
-        predicted_doc_type = top_anchor.name if is_confident else None
+
+        knn_doctype, knn_score = await self._find_knn_doctype(
+            header_vector, exclude_point_id
+        )
+
+        is_confident = top_score >= settings.threshold_doctype_confident
+        margin = (top_score - second_score) if second_score is not None else 1.0
+        is_ambiguous = margin < 0.05
+
+        if knn_doctype and knn_score >= 0.85:
+            predicted_doc_type = knn_doctype
+            top_score = knn_score
+            is_confident = True
+        elif is_confident:
+            predicted_doc_type = top_anchor.name
+        else:
+            predicted_doc_type = None
 
         matched_anchors = [
             {
-                "name": top_anchor.name,
+                "name": predicted_doc_type or top_anchor.name,
                 "category": "doc_type",
                 "similarity": top_score,
                 "confident": is_confident,
                 "ambiguous": is_ambiguous,
+                "review_required": not is_confident or is_ambiguous,
+                "knn_match": knn_doctype if knn_score >= 0.85 else None,
+                "knn_score": knn_score if knn_score >= 0.85 else 0.0,
             }
         ]
         return predicted_doc_type, top_score, matched_anchors
@@ -419,7 +509,7 @@ class VectorClassifierEngine:
         ) = await self.ollama_client.get_document_embeddings(header_text, content)
 
         pred_doc_type, doc_confidence, doc_anchors = await self._classify_doc_type(
-            header_vector
+            header_vector, content_vector=content_vector
         )
 
         is_kontoauszug = (

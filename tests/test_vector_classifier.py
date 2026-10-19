@@ -1,7 +1,7 @@
 """Unit tests for vector classification engine, cosine similarity, and k-NN integration."""
 
 import math
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from qdrant_client.models import ScoredPoint
@@ -773,3 +773,68 @@ async def test_classify_kontoauszug_excluded_from_tax():
     assert result.tax_review_required is False
     assert result.tax_confidence == 0.0
     assert result.tax_category is None
+
+
+@pytest.mark.asyncio
+async def test_check_multipage_contract():
+    """Verify multi-page contract detection overrides cover letter."""
+    anchors = get_document_type_anchors()
+    korr_anchor = next(a for a in anchors if a.name == "Korrespondenz")
+    vertrag_anchor = next(a for a in anchors if a.name == "Vertrag")
+
+    engine = VectorClassifierEngine(
+        anchor_embeddings={
+            korr_anchor.name: [1.0, 0.0],
+            vertrag_anchor.name: [0.0, 1.0],
+        }
+    )
+
+    # 1. Top is Korrespondenz, content is contract -> switches to Vertrag
+    content_vec = [0.1, 0.99]
+    top_a, top_s = await engine._check_multipage_contract(
+        content_vec, korr_anchor, 0.85, anchors
+    )
+    assert top_a.name == "Vertrag"
+    assert top_s > 0.50
+
+    # 2. Content is None -> unchanged
+    top_a, top_s = await engine._check_multipage_contract(
+        None, korr_anchor, 0.85, anchors
+    )
+    assert top_a.name == "Korrespondenz"
+
+    # 3. Top is Rechnung -> unchanged
+    rechnung_anchor = next(a for a in anchors if a.name == "Rechnung")
+    top_a, top_s = await engine._check_multipage_contract(
+        content_vec, rechnung_anchor, 0.85, anchors
+    )
+    assert top_a.name == "Rechnung"
+
+
+@pytest.mark.asyncio
+async def test_find_knn_doctype():
+    """Verify k-NN template match for recurring correspondents."""
+    mock_qdrant = AsyncMock(spec=QdrantStorageManager)
+    engine = VectorClassifierEngine(qdrant_manager=mock_qdrant)
+
+    # 1. Match >= 0.85 found
+    pt = MagicMock()
+    pt.id = "uuid-1"
+    pt.score = 0.92
+    pt.payload = {"doctype_curated": "Mahnung"}
+    mock_qdrant.search_by_vector.return_value = [pt]
+
+    dt, score = await engine._find_knn_doctype([0.1, 0.2], exclude_point_id="uuid-99")
+    assert dt == "Mahnung"
+    assert score == 0.92
+
+    # 2. Exclude matching point ID
+    mock_qdrant.search_by_vector.return_value = [pt]
+    dt, score = await engine._find_knn_doctype([0.1, 0.2], exclude_point_id="uuid-1")
+    assert dt is None
+
+    # 3. Qdrant is None
+    engine_no_qdrant = VectorClassifierEngine(qdrant_manager=None)
+    dt, score = await engine_no_qdrant._find_knn_doctype([0.1, 0.2])
+    assert dt is None
+    assert score == 0.0
