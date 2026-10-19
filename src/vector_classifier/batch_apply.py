@@ -366,6 +366,35 @@ class BatchApplyRunner:
                     else:
                         await asyncio.sleep(2.0)
 
+    async def _process_scroll_batch(
+        self,
+        records: list[Any],
+        limit: int | None,
+        total_processed: int,
+        doctype_green_assign: dict[str, list[int]],
+        doctype_yellow_review: list[int],
+        doctype_groundtruth: list[int],
+        tags_to_add: dict[str, list[int]],
+        tax_confident: list[int],
+        tax_review: list[int],
+    ) -> int:
+        """Process a single scroll batch of records."""
+        for r in records:
+            ok = await self._evaluate_point(
+                r,
+                doctype_green_assign,
+                doctype_yellow_review,
+                doctype_groundtruth,
+                tags_to_add,
+                tax_confident,
+                tax_review,
+            )
+            if ok:
+                total_processed += 1
+            if limit and total_processed >= limit:
+                break
+        return total_processed
+
     async def _scroll_and_evaluate_all(
         self,
         limit: int | None,
@@ -392,22 +421,21 @@ class BatchApplyRunner:
             if not records:
                 break
 
-            for r in records:
-                ok = await self._evaluate_point(
-                    r,
-                    doctype_green_assign,
-                    doctype_yellow_review,
-                    doctype_groundtruth,
-                    tags_to_add,
-                    tax_confident,
-                    tax_review,
-                )
-                if ok:
-                    total_processed += 1
-                if limit and total_processed >= limit:
-                    break
+            total_processed = await self._process_scroll_batch(
+                records,
+                limit,
+                total_processed,
+                doctype_green_assign,
+                doctype_yellow_review,
+                doctype_groundtruth,
+                tags_to_add,
+                tax_confident,
+                tax_review,
+            )
 
-            if (limit and total_processed >= limit) or next_page is None:
+            if limit and total_processed >= limit:
+                break
+            if next_page is None:
                 break
 
         return total_processed
