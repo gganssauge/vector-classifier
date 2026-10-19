@@ -236,7 +236,8 @@ class VectorClassifierEngine:
                     dt = payload.get("doctype_curated") or payload.get(
                         "doc_type_original"
                     )
-                    return dt, round(score, 4)
+                    if dt and dt != "Sonstiges":
+                        return dt, round(score, 4)
         except Exception as exc:
             logger.debug("k-NN doctype template match skipped: %s", exc)
 
