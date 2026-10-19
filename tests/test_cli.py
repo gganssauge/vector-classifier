@@ -116,3 +116,33 @@ def test_cli_sync_curated_command(monkeypatch):
     result = runner.invoke(app, ["sync-curated", "--dry-run"])
     assert result.exit_code == 0
     assert "Curated Synchronization Complete:" in strip_ansi(result.stdout)
+
+
+def test_cli_apply_batch_command(monkeypatch):
+    """Verify apply-batch command invokes BatchApplyRunner.run."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    mock_runner = MagicMock()
+    mock_runner.run = AsyncMock(
+        return_value={
+            "total_processed": 10,
+            "doctype_green": 2,
+            "doctype_yellow": 5,
+            "tags_added": 8,
+            "tax_confident": 1,
+            "tax_review": 2,
+        }
+    )
+    mock_runner.qdrant = MagicMock()
+    mock_runner.qdrant.close = AsyncMock()
+    mock_runner.engine = MagicMock()
+    mock_runner.engine.close = AsyncMock()
+
+    monkeypatch.setattr(
+        "vector_classifier.batch_apply.BatchApplyRunner",
+        lambda **kwargs: mock_runner,
+    )
+
+    result = runner.invoke(app, ["apply-batch", "--dry-run", "--limit", "10"])
+    assert result.exit_code == 0
+    mock_runner.run.assert_called_once()

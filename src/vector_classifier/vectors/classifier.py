@@ -173,6 +173,75 @@ class VectorClassifierEngine:
         if self.qdrant_manager is not None:
             await self.qdrant_manager.close()
 
+    async def _check_multipage_contract(
+        self,
+        content_vector: list[float] | None,
+        top_anchor: SemanticAnchor,
+        top_score: float,
+        doc_type_anchors: list[SemanticAnchor],
+    ) -> tuple[SemanticAnchor, float]:
+        """Check whether document is a contract accompanied by a cover letter."""
+        if top_anchor.name != "Korrespondenz" or content_vector is None:
+            return top_anchor, top_score
+
+        vertrag_anchor = next(
+            (a for a in doc_type_anchors if a.name == "Vertrag"), None
+        )
+        if vertrag_anchor is None:
+            return top_anchor, top_score
+
+        vertrag_vec = await self._get_or_compute_anchor_embedding(vertrag_anchor)
+        vertrag_content_sim = cosine_similarity(content_vector, vertrag_vec)
+        korr_anchor = next(
+            (a for a in doc_type_anchors if a.name == "Korrespondenz"), None
+        )
+        korr_vec = (
+            await self._get_or_compute_anchor_embedding(korr_anchor)
+            if korr_anchor
+            else None
+        )
+        korr_content_sim = (
+            cosine_similarity(content_vector, korr_vec) if korr_vec else 0.0
+        )
+        if vertrag_content_sim >= 0.50 and vertrag_content_sim >= korr_content_sim:
+            return vertrag_anchor, round(vertrag_content_sim, 4)
+
+        return top_anchor, top_score
+
+    async def _find_knn_doctype(
+        self,
+        header_vector: list[float],
+        exclude_point_id: str | None = None,
+    ) -> tuple[str | None, float]:
+        """Find matching document type from curated nearest neighbors."""
+        if self.qdrant_manager is None:
+            return None, 0.0
+
+        try:
+            neighbors = await self.qdrant_manager.search_by_vector(
+                vector_name="header",
+                vector=header_vector,
+                limit=5,
+                filter_criteria={"is_doctype_curated": True},
+            )
+            for n in neighbors:
+                score = float(getattr(n, "score", 0.0))
+                n_id = getattr(n, "id", None)
+                if (
+                    exclude_point_id and str(n_id) == str(exclude_point_id)
+                ) or score >= 0.9999:
+                    continue
+                if score >= 0.85:
+                    payload = getattr(n, "payload", {}) or {}
+                    dt = payload.get("doctype_curated") or payload.get(
+                        "doc_type_original"
+                    )
+                    return dt, round(score, 4)
+        except Exception as exc:
+            logger.debug("k-NN doctype template match skipped: %s", exc)
+
+        return None, 0.0
+
     async def _classify_doc_type(
         self,
         header_vector: list[float],
@@ -197,62 +266,13 @@ class VectorClassifierEngine:
             round(doc_type_scores[1][1], 4) if len(doc_type_scores) > 1 else None
         )
 
-        # Multi-page Begleitschreiben-Erkennung:
-        # Falls Header auf Korrespondenz hindeutet, Folgeseiten (content_vector) jedoch Vertrag aufweisen:
-        if top_anchor.name == "Korrespondenz" and content_vector is not None:
-            vertrag_anchor = next(
-                (a for a in doc_type_anchors if a.name == "Vertrag"), None
-            )
-            if vertrag_anchor is not None:
-                vertrag_vec = await self._get_or_compute_anchor_embedding(
-                    vertrag_anchor
-                )
-                vertrag_content_sim = cosine_similarity(content_vector, vertrag_vec)
-                korr_anchor = next(
-                    (a for a in doc_type_anchors if a.name == "Korrespondenz"), None
-                )
-                korr_vec = (
-                    await self._get_or_compute_anchor_embedding(korr_anchor)
-                    if korr_anchor
-                    else None
-                )
-                korr_content_sim = (
-                    cosine_similarity(content_vector, korr_vec) if korr_vec else 0.0
-                )
-                if (
-                    vertrag_content_sim >= 0.50
-                    and vertrag_content_sim >= korr_content_sim
-                ):
-                    top_anchor = vertrag_anchor
-                    top_score = round(vertrag_content_sim, 4)
+        top_anchor, top_score = await self._check_multipage_contract(
+            content_vector, top_anchor, top_score, doc_type_anchors
+        )
 
-        # Template-kNN Match in Qdrant (wiederkehrende Korrespondenten / Layouts)
-        knn_doctype = None
-        knn_score = 0.0
-        if self.qdrant_manager is not None:
-            try:
-                neighbors = await self.qdrant_manager.search_by_vector(
-                    vector_name="header",
-                    vector=header_vector,
-                    limit=5,
-                    filter_criteria={"is_doctype_curated": True},
-                )
-                for n in neighbors:
-                    score = float(getattr(n, "score", 0.0))
-                    n_id = getattr(n, "id", None)
-                    if exclude_point_id and str(n_id) == str(exclude_point_id):
-                        continue
-                    if score >= 0.9999:
-                        continue
-                    if score >= 0.85:
-                        knn_score = round(score, 4)
-                        payload = getattr(n, "payload", {}) or {}
-                        knn_doctype = payload.get("doctype_curated") or payload.get(
-                            "doc_type_original"
-                        )
-                        break
-            except Exception as exc:
-                logger.debug("k-NN doctype template match skipped: %s", exc)
+        knn_doctype, knn_score = await self._find_knn_doctype(
+            header_vector, exclude_point_id
+        )
 
         is_confident = top_score >= settings.threshold_doctype_confident
         margin = (top_score - second_score) if second_score is not None else 1.0

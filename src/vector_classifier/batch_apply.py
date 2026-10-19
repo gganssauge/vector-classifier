@@ -128,6 +128,34 @@ class BatchApplyRunner:
             macro_tag_ids,
         )
 
+    async def _evaluate_uncalibrated_doctype(
+        self,
+        r: Any,
+        pid: int,
+        orig_dt: str | None,
+        h_vec: list[float],
+        c_vec: list[float] | None,
+        doctype_green_assign: dict[str, list[int]],
+        doctype_yellow_review: list[int],
+    ) -> None:
+        """Evaluate uncurated document type classification for point."""
+        _, _, matched = await self.engine._classify_doc_type(
+            header_vector=h_vec,
+            content_vector=c_vec,
+            exclude_point_id=str(r.id),
+        )
+        match_info = matched[0] if matched else {}
+        is_review = match_info.get("review_required", False)
+        top_name = match_info.get("name")
+        knn_match = match_info.get("knn_match")
+
+        if (not is_review or knn_match) and top_name:
+            chosen = knn_match or top_name
+            if chosen != orig_dt:
+                doctype_green_assign.setdefault(chosen, []).append(pid)
+        else:
+            doctype_yellow_review.append(pid)
+
     async def _evaluate_doctype(
         self,
         r: Any,
@@ -149,22 +177,15 @@ class BatchApplyRunner:
             if dt_curated != orig_dt:
                 doctype_green_assign.setdefault(dt_curated, []).append(pid)
         elif h_vec:
-            _, _, matched = await self.engine._classify_doc_type(
-                header_vector=h_vec,
-                content_vector=c_vec,
-                exclude_point_id=str(r.id),
+            await self._evaluate_uncalibrated_doctype(
+                r,
+                pid,
+                orig_dt,
+                h_vec,
+                c_vec,
+                doctype_green_assign,
+                doctype_yellow_review,
             )
-            match_info = matched[0] if matched else {}
-            is_review = match_info.get("review_required", False)
-            top_name = match_info.get("name")
-            knn_match = match_info.get("knn_match")
-
-            if (not is_review or knn_match) and top_name:
-                chosen = knn_match or top_name
-                if chosen != orig_dt:
-                    doctype_green_assign.setdefault(chosen, []).append(pid)
-            else:
-                doctype_yellow_review.append(pid)
 
     async def _evaluate_tags_and_tax(
         self,
@@ -181,11 +202,12 @@ class BatchApplyRunner:
 
         pred_tags, _, _ = await self.engine._classify_thematic_tags(c_vec)
         raw_existing = p.get("tags_original") or []
-        existing_tags = (
-            [raw_existing]
-            if isinstance(raw_existing, str)
-            else (raw_existing if isinstance(raw_existing, list) else [])
-        )
+        if isinstance(raw_existing, list):
+            existing_tags = raw_existing
+        elif isinstance(raw_existing, str):
+            existing_tags = [raw_existing]
+        else:
+            existing_tags = []
 
         for pt in pred_tags:
             if pt not in existing_tags:
@@ -344,6 +366,123 @@ class BatchApplyRunner:
                     else:
                         await asyncio.sleep(2.0)
 
+    async def _scroll_and_evaluate_all(
+        self,
+        limit: int | None,
+        doctype_green_assign: dict[str, list[int]],
+        doctype_yellow_review: list[int],
+        doctype_groundtruth: list[int],
+        tags_to_add: dict[str, list[int]],
+        tax_confident: list[int],
+        tax_review: list[int],
+    ) -> int:
+        """Scroll documents from Qdrant and evaluate each point."""
+        q_client = self.qdrant.client
+        next_page = None
+        total_processed = 0
+
+        while True:
+            records, next_page = await q_client.scroll(
+                collection_name=self.qdrant.collection,
+                limit=200,
+                with_payload=True,
+                with_vectors=["header", "content"],
+                offset=next_page,
+            )
+            if not records:
+                break
+
+            for r in records:
+                ok = await self._evaluate_point(
+                    r,
+                    doctype_green_assign,
+                    doctype_yellow_review,
+                    doctype_groundtruth,
+                    tags_to_add,
+                    tax_confident,
+                    tax_review,
+                )
+                if ok:
+                    total_processed += 1
+                if limit and total_processed >= limit:
+                    break
+
+            if (limit and total_processed >= limit) or next_page is None:
+                break
+
+        return total_processed
+
+    async def _apply_bulk_changes(
+        self,
+        client: httpx.AsyncClient,
+        con: Console,
+        doc_type_map: dict[str, int],
+        doctype_review_tag_id: int,
+        steuer_review_tag_id: int,
+        steuerrelevant_tag_id: int,
+        macro_tag_ids: dict[str, int],
+        doctype_green_assign: dict[str, list[int]],
+        doctype_yellow_review: list[int],
+        tags_to_add: dict[str, list[int]],
+        tax_confident: list[int],
+        tax_review: list[int],
+    ) -> None:
+        """Apply all bulk changes in Paperless via native bulk edit endpoint."""
+        con.print(
+            "\n[bold yellow]Applying changes in Paperless via native Bulk API (Chunks of 50)...[/bold yellow]"
+        )
+        for dt_name, ids in doctype_green_assign.items():
+            if dt_id := doc_type_map.get(dt_name):
+                await self._post_bulk_chunks(
+                    client,
+                    con,
+                    ids,
+                    "set_document_type",
+                    {"document_type": dt_id},
+                    f"Set Doctype '{dt_name}'",
+                )
+
+        await self._post_bulk_chunks(
+            client,
+            con,
+            doctype_yellow_review,
+            "modify_tags",
+            {"add_tags": [doctype_review_tag_id], "remove_tags": []},
+            "Tagging Doctype-Review",
+        )
+
+        for tname, ids in tags_to_add.items():
+            if tid := macro_tag_ids.get(tname):
+                await self._post_bulk_chunks(
+                    client,
+                    con,
+                    ids,
+                    "modify_tags",
+                    {"add_tags": [tid], "remove_tags": []},
+                    f"Tagging '{tname}'",
+                )
+
+        await self._post_bulk_chunks(
+            client,
+            con,
+            tax_confident,
+            "modify_tags",
+            {"add_tags": [steuerrelevant_tag_id], "remove_tags": []},
+            "Tagging steuerrelevant",
+        )
+        await self._post_bulk_chunks(
+            client,
+            con,
+            tax_review,
+            "modify_tags",
+            {"add_tags": [steuer_review_tag_id], "remove_tags": []},
+            "Tagging Steuer-Review",
+        )
+
+        con.print(
+            "[bold green]Bulk application successfully completed in Paperless![/bold green]"
+        )
+
     async def run(
         self,
         dry_run: bool = True,
@@ -372,10 +511,6 @@ class BatchApplyRunner:
             con.print(
                 f"[cyan]Scrolling documents from Qdrant (dry_run={dry_run})...[/cyan]"
             )
-            q_client = self.qdrant.client
-            next_page = None
-            total_processed = 0
-
             doctype_green_assign: dict[str, list[int]] = {}
             doctype_yellow_review: list[int] = []
             doctype_groundtruth: list[int] = []
@@ -383,34 +518,15 @@ class BatchApplyRunner:
             tax_confident: list[int] = []
             tax_review: list[int] = []
 
-            while True:
-                records, next_page = await q_client.scroll(
-                    collection_name=self.qdrant.collection,
-                    limit=200,
-                    with_payload=True,
-                    with_vectors=["header", "content"],
-                    offset=next_page,
-                )
-                if not records:
-                    break
-
-                for r in records:
-                    ok = await self._evaluate_point(
-                        r,
-                        doctype_green_assign,
-                        doctype_yellow_review,
-                        doctype_groundtruth,
-                        tags_to_add,
-                        tax_confident,
-                        tax_review,
-                    )
-                    if ok:
-                        total_processed += 1
-                    if limit and total_processed >= limit:
-                        break
-
-                if (limit and total_processed >= limit) or next_page is None:
-                    break
+            total_processed = await self._scroll_and_evaluate_all(
+                limit,
+                doctype_green_assign,
+                doctype_yellow_review,
+                doctype_groundtruth,
+                tags_to_add,
+                tax_confident,
+                tax_review,
+            )
 
             self._print_summary(
                 con,
@@ -424,61 +540,19 @@ class BatchApplyRunner:
             )
 
             if not dry_run:
-                con.print(
-                    "\n[bold yellow]Applying changes in Paperless via native Bulk API (Chunks of 50)...[/bold yellow]"
-                )
-                for dt_name, ids in doctype_green_assign.items():
-                    dt_id = doc_type_map.get(dt_name)
-                    if dt_id:
-                        await self._post_bulk_chunks(
-                            client,
-                            con,
-                            ids,
-                            "set_document_type",
-                            {"document_type": dt_id},
-                            f"Set Doctype '{dt_name}'",
-                        )
-
-                await self._post_bulk_chunks(
+                await self._apply_bulk_changes(
                     client,
                     con,
+                    doc_type_map,
+                    doctype_review_tag_id,
+                    steuer_review_tag_id,
+                    steuerrelevant_tag_id,
+                    macro_tag_ids,
+                    doctype_green_assign,
                     doctype_yellow_review,
-                    "modify_tags",
-                    {"add_tags": [doctype_review_tag_id], "remove_tags": []},
-                    "Tagging Doctype-Review",
-                )
-
-                for tname, ids in tags_to_add.items():
-                    tid = macro_tag_ids.get(tname)
-                    if tid:
-                        await self._post_bulk_chunks(
-                            client,
-                            con,
-                            ids,
-                            "modify_tags",
-                            {"add_tags": [tid], "remove_tags": []},
-                            f"Tagging '{tname}'",
-                        )
-
-                await self._post_bulk_chunks(
-                    client,
-                    con,
+                    tags_to_add,
                     tax_confident,
-                    "modify_tags",
-                    {"add_tags": [steuerrelevant_tag_id], "remove_tags": []},
-                    "Tagging steuerrelevant",
-                )
-                await self._post_bulk_chunks(
-                    client,
-                    con,
                     tax_review,
-                    "modify_tags",
-                    {"add_tags": [steuer_review_tag_id], "remove_tags": []},
-                    "Tagging Steuer-Review",
-                )
-
-                con.print(
-                    "[bold green]Bulk application successfully completed in Paperless![/bold green]"
                 )
 
             return {
