@@ -28,20 +28,18 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  test-and-analyze:
-    name: Test & SonarCloud Analysis
+  changes:
+    name: Detect Changes
     runs-on: ubuntu-latest
     permissions:
       contents: read
       pull-requests: read
-      checks: read
     outputs:
-      container_changed: ${{ steps.filter.outputs.container }}
+      container: ${{ steps.filter.outputs.container }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
         with:
-          fetch-depth: 0
           persist-credentials: false
 
       - name: Check for container-relevant changes
@@ -56,6 +54,20 @@ jobs:
               - 'pyproject.toml'
               - 'uv.lock'
               - '.github/workflows/ci.yml'
+
+  test-and-analyze:
+    name: Test & SonarCloud Analysis
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+      checks: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
 
       - name: Set up uv
         uses: astral-sh/setup-uv@v10.3.0
@@ -131,10 +143,10 @@ jobs:
 
   build-and-scan:
     name: Docker Build, Trivy Scan & GHCR Push
-    needs: test-and-analyze
+    needs: changes
     if: |
-      (github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')) && (needs.test-and-analyze.outputs.container_changed == 'true' || startsWith(github.ref, 'refs/tags/v'))) ||
-      (github.event_name == 'pull_request' && needs.test-and-analyze.outputs.container_changed == 'true') ||
+      (github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')) && (needs.changes.outputs.container == 'true' || startsWith(github.ref, 'refs/tags/v'))) ||
+      (github.event_name == 'pull_request' && needs.changes.outputs.container == 'true') ||
       (github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
     permissions:
@@ -183,10 +195,10 @@ jobs:
             ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha,scope=vector-classifier
-          cache-to: type=gha,mode=max,scope=vector-classifier
+          cache-to: ${{ github.ref == 'refs/heads/main' && 'type=gha,mode=min,scope=vector-classifier' || '' }}
 
       - name: Enforce Trivy Quality Gate
-        uses: aquasecurity/trivy-action@master
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: vector-classifier:${{ github.sha }}
           format: 'table'
@@ -207,7 +219,7 @@ jobs:
 
   automerge:
     name: Auto-merge PR (Label 'automerge')
-    needs: [test-and-analyze, build-and-scan]
+    needs: [changes, test-and-analyze, build-and-scan]
     if: |
       always() &&
       github.event_name == 'pull_request' &&
